@@ -19,9 +19,13 @@ export type Database = {
           ativo: boolean | null
           created_at: string | null
           data_inicio: string | null
+          fim: string | null
           id: string
+          inicio: string | null
           membro_id: string
+          org_id: string | null
           plano_id: string
+          status: string | null
           terreiro_id: string
           updated_at: string | null
         }
@@ -29,9 +33,13 @@ export type Database = {
           ativo?: boolean | null
           created_at?: string | null
           data_inicio?: string | null
+          fim?: string | null
           id?: string
+          inicio?: string | null
           membro_id: string
+          org_id?: string | null
           plano_id: string
+          status?: string | null
           terreiro_id: string
           updated_at?: string | null
         }
@@ -39,9 +47,13 @@ export type Database = {
           ativo?: boolean | null
           created_at?: string | null
           data_inicio?: string | null
+          fim?: string | null
           id?: string
+          inicio?: string | null
           membro_id?: string
+          org_id?: string | null
           plano_id?: string
+          status?: string | null
           terreiro_id?: string
           updated_at?: string | null
         }
@@ -51,6 +63,13 @@ export type Database = {
             columns: ["membro_id"]
             isOneToOne: false
             referencedRelation: "membros"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assinaturas_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "terreiros"
             referencedColumns: ["id"]
           },
           {
@@ -66,41 +85,74 @@ export type Database = {
         Row: {
           assinatura_id: string
           created_at: string | null
+          data_operacao: string | null
           data_pagamento: string | null
           data_vencimento: string
+          dt_pagamento: string | null
+          dt_vencimento: string | null
+          external_id: string | null
+          forma_pagamento: string | null
           id: string
           membro_id: string
+          org_id: string | null
           plano_id: string
+          refer: string | null
           status: string | null
           terreiro_id: string
           updated_at: string | null
+          usuario_operacao: string | null
           valor: number
+          valor_centavos: number | null
+          vl_desconto_centavos: number | null
+          vl_pago_centavos: number | null
         }
         Insert: {
           assinatura_id: string
           created_at?: string | null
+          data_operacao?: string | null
           data_pagamento?: string | null
           data_vencimento: string
+          dt_pagamento?: string | null
+          dt_vencimento?: string | null
+          external_id?: string | null
+          forma_pagamento?: string | null
           id?: string
           membro_id: string
+          org_id?: string | null
           plano_id: string
+          refer?: string | null
           status?: string | null
           terreiro_id: string
           updated_at?: string | null
+          usuario_operacao?: string | null
           valor: number
+          valor_centavos?: number | null
+          vl_desconto_centavos?: number | null
+          vl_pago_centavos?: number | null
         }
         Update: {
           assinatura_id?: string
           created_at?: string | null
+          data_operacao?: string | null
           data_pagamento?: string | null
           data_vencimento?: string
+          dt_pagamento?: string | null
+          dt_vencimento?: string | null
+          external_id?: string | null
+          forma_pagamento?: string | null
           id?: string
           membro_id?: string
+          org_id?: string | null
           plano_id?: string
+          refer?: string | null
           status?: string | null
           terreiro_id?: string
           updated_at?: string | null
+          usuario_operacao?: string | null
           valor?: number
+          valor_centavos?: number | null
+          vl_desconto_centavos?: number | null
+          vl_pago_centavos?: number | null
         }
         Relationships: [
           {
@@ -118,6 +170,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "faturas_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "terreiros"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "faturas_plano_id_fkey"
             columns: ["plano_id"]
             isOneToOne: false
@@ -129,44 +188,108 @@ export type Database = {
       membros: {
         Row: {
           ativo: boolean | null
+          bairro: string | null
+          cep: string | null
           created_at: string | null
+          data_admissao_terreiro: string | null
           data_cadastro: string | null
           data_nascimento: string | null
+          dt_nascimento: string | null
           email: string | null
           endereco: string | null
           id: string
+          matricula: string | null
           nome: string
+          observacoes: string | null
+          org_id: string | null
           telefone: string | null
           terreiro_id: string
           updated_at: string | null
         }
         Insert: {
           ativo?: boolean | null
+          bairro?: string | null
+          cep?: string | null
           created_at?: string | null
+          data_admissao_terreiro?: string | null
           data_cadastro?: string | null
           data_nascimento?: string | null
+          dt_nascimento?: string | null
           email?: string | null
           endereco?: string | null
           id?: string
+          matricula?: string | null
           nome: string
+          observacoes?: string | null
+          org_id?: string | null
           telefone?: string | null
           terreiro_id: string
           updated_at?: string | null
         }
         Update: {
           ativo?: boolean | null
+          bairro?: string | null
+          cep?: string | null
           created_at?: string | null
+          data_admissao_terreiro?: string | null
           data_cadastro?: string | null
           data_nascimento?: string | null
+          dt_nascimento?: string | null
           email?: string | null
           endereco?: string | null
           id?: string
+          matricula?: string | null
           nome?: string
+          observacoes?: string | null
+          org_id?: string | null
           telefone?: string | null
           terreiro_id?: string
           updated_at?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "membros_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "terreiros"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pagamentos: {
+        Row: {
+          fatura_id: string
+          id: string
+          metodo: string | null
+          pago_em: string
+          txn_id: string | null
+          valor_centavos: number
+        }
+        Insert: {
+          fatura_id: string
+          id?: string
+          metodo?: string | null
+          pago_em?: string
+          txn_id?: string | null
+          valor_centavos: number
+        }
+        Update: {
+          fatura_id?: string
+          id?: string
+          metodo?: string | null
+          pago_em?: string
+          txn_id?: string | null
+          valor_centavos?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pagamentos_fatura_id_fkey"
+            columns: ["fatura_id"]
+            isOneToOne: false
+            referencedRelation: "faturas"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       planos: {
         Row: {
@@ -175,9 +298,11 @@ export type Database = {
           dia_vencimento: number
           id: string
           nome: string
+          org_id: string | null
           terreiro_id: string
           updated_at: string | null
           valor: number
+          valor_centavos: number | null
         }
         Insert: {
           ativo?: boolean | null
@@ -185,9 +310,11 @@ export type Database = {
           dia_vencimento: number
           id?: string
           nome: string
+          org_id?: string | null
           terreiro_id: string
           updated_at?: string | null
           valor: number
+          valor_centavos?: number | null
         }
         Update: {
           ativo?: boolean | null
@@ -195,9 +322,69 @@ export type Database = {
           dia_vencimento?: number
           id?: string
           nome?: string
+          org_id?: string | null
           terreiro_id?: string
           updated_at?: string | null
           valor?: number
+          valor_centavos?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "planos_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "terreiros"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          created_at: string | null
+          nome: string | null
+          org_id: string | null
+          role: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          nome?: string | null
+          org_id?: string | null
+          role?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          nome?: string | null
+          org_id?: string | null
+          role?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "profiles_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "terreiros"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      terreiros: {
+        Row: {
+          created_at: string | null
+          id: string
+          nome: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          nome: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          nome?: string
         }
         Relationships: []
       }
@@ -206,7 +393,18 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      create_terreiro: {
+        Args: { nome_terreiro: string }
+        Returns: string
+      }
+      gerar_faturas_mes: {
+        Args: { ano: number; mes: number }
+        Returns: number
+      }
+      get_user_org_id: {
+        Args: Record<PropertyKey, never>
+        Returns: string
+      }
     }
     Enums: {
       [_ in never]: never
