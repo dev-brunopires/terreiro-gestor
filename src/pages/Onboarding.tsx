@@ -15,33 +15,60 @@ export default function Onboarding() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const nome = nomeTerreiro.trim();
+    if (!nome) return;
+
     setLoading(true);
 
     try {
+      // 1) Cria o terreiro via RPC (precisa retornar o ID do novo terreiro)
       const { data, error } = await supabase.rpc('create_terreiro', {
-        nome_terreiro: nomeTerreiro
+        nome_terreiro: nome,
       });
 
       if (error) {
         toast({
-          title: "Erro ao criar terreiro",
+          title: 'Erro ao criar terreiro',
           description: error.message,
-          variant: "destructive",
+          variant: 'destructive',
         });
         return;
       }
 
+      // A RPC pode retornar uma string (id) ou um objeto com { id }
+      const terreiroId: string | null =
+        typeof data === 'string' ? data : (data?.id ?? null);
+
+      // 2) Vincula o usuário logado ao terreiro como OWNER (profiles.org_id/role)
+      const { data: auth } = await supabase.auth.getUser();
+      if (auth?.user && terreiroId) {
+        const { error: upErr } = await supabase
+          .from('profiles')
+          .update({ org_id: terreiroId, role: 'owner' })
+          .eq('user_id', auth.user.id);
+
+        if (upErr) {
+          // não bloqueia o fluxo, mas avisa para recarregar caso necessário
+          toast({
+            title: 'Aviso',
+            description:
+              'Terreiro criado, mas não consegui vincular seu perfil. Recarregue a página se o menu não atualizar.',
+            variant: 'destructive',
+          });
+        }
+      }
+
       toast({
-        title: "Terreiro criado com sucesso!",
-        description: `${nomeTerreiro} foi criado e você é o administrador`,
+        title: 'Terreiro criado com sucesso!',
+        description: `${nome} foi criado e você é o administrador.`,
       });
 
       navigate('/dashboard');
-    } catch (error) {
+    } catch (err: any) {
       toast({
-        title: "Erro inesperado",
-        description: "Tente novamente em alguns instantes",
-        variant: "destructive",
+        title: 'Erro inesperado',
+        description: err?.message ?? 'Tente novamente em alguns instantes',
+        variant: 'destructive',
       });
     } finally {
       setLoading(false);
@@ -81,10 +108,10 @@ export default function Onboarding() {
                 Este será o nome principal do seu terreiro no sistema
               </p>
             </div>
-            
-            <Button 
-              type="submit" 
-              className="w-full bg-gradient-sacred hover:opacity-90 transition-opacity" 
+
+            <Button
+              type="submit"
+              className="w-full bg-gradient-sacred hover:opacity-90 transition-opacity"
               disabled={loading || !nomeTerreiro.trim()}
             >
               {loading ? 'Criando terreiro...' : 'Criar terreiro'}

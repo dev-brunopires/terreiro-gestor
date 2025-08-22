@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -6,28 +6,38 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Plus, Edit, Trash2, FileText, Search } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 
 interface Assinatura {
   id: string;
   inicio: string;
-  fim?: string;
+  fim?: string | null;
   status: string;
-  membro: {
-    id: string;
-    nome: string;
-    matricula?: string;
-  };
-  plano: {
-    id: string;
-    nome: string;
-    valor_centavos: number;
-  };
+  membro: { id: string; nome: string; matricula?: string };
+  plano: { id: string; nome: string; valor_centavos: number };
   created_at: string;
 }
 
@@ -41,6 +51,7 @@ interface Plano {
   id: string;
   nome: string;
   valor_centavos: number;
+  dia_vencimento?: number;
 }
 
 export default function Assinaturas() {
@@ -48,8 +59,10 @@ export default function Assinaturas() {
   const [membros, setMembros] = useState<Membro[]>([]);
   const [planos, setPlanos] = useState<Plano[]>([]);
   const [loading, setLoading] = useState(true);
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingAssinatura, setEditingAssinatura] = useState<Assinatura | null>(null);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const { toast } = useToast();
@@ -58,212 +71,337 @@ export default function Assinaturas() {
     membro_id: '',
     plano_id: '',
     inicio: new Date().toISOString().split('T')[0],
+    tem_fim: false,
     fim: '',
     status: 'ativa',
   });
 
+  // guarda o plano original quando abre o dialog de edição
+  const originalPlanoIdRef = useRef<string | null>(null);
+
+  // ---------- helpers ----------
+  const ymd = (d?: string | null) => (d ? new Date(d).toISOString().slice(0, 10) : '');
+
+  const formatCurrency = (centavos: number) =>
+    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(centavos / 100);
+
+  const getStatusBadge = (status: string) => {
+    const variants: Record<string, 'default' | 'secondary' | 'destructive'> = {
+      ativa: 'default',
+      pausada: 'secondary',
+      cancelada: 'destructive',
+    };
+    return <Badge variant={variants[status] || 'secondary'}>{status.charAt(0).toUpperCase() + status.slice(1)}</Badge>;
+  };
+
+  const clampDiaDoMes = (ano: number, mes1a12: number, dia: number) => {
+    const last = new Date(ano, mes1a12, 0).getDate();
+    return Math.min(dia, last);
+  };
+
+  // ---------- data load ----------
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!dialogOpen) {
+      setEditingAssinatura(null);
+      originalPlanoIdRef.current = null;
+      setFormData((f) => ({
+        membro_id: '',
+        plano_id: '',
+        inicio: new Date().toISOString().split('T')[0],
+        tem_fim: false,
+        fim: '',
+        status: 'ativa',
+      }));
+    }
+  }, [dialogOpen]);
+
   const loadData = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      
-      const [assinaturasResult, membrosResult, planosResult] = await Promise.all([
-        supabase
-          .from('assinaturas')
-          .select(`
-            id,
-            inicio,
-            fim,
-            status,
-            created_at,
-            membros:membro_id (
-              id,
-              nome,
-              matricula
-            ),
-            planos:plano_id (
-              id,
-              nome,
-              valor_centavos
-            )
-          `)
-          .order('created_at', { ascending: false }),
-        
-        supabase
-          .from('membros')
-          .select('id, nome, matricula')
-          .eq('ativo', true)
-          .order('nome'),
-        
-        supabase
-          .from('planos')
-          .select('id, nome, valor_centavos')
-          .order('nome')
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth?.user) throw new Error('Usuário não autenticado');
+
+      const { data: profile, error: profErr } = await supabase
+        .from('profiles')
+        .select('org_id')
+        .eq('user_id', auth.user.id)
+        .single();
+
+      if (profErr) throw profErr;
+      if (!profile?.org_id) throw new Error('org_id não encontrado no profile');
+
+      const orgId = profile.org_id;
+
+      const [membrosResult, planosResult] = await Promise.all([
+        supabase.from('membros').select('id, nome, matricula').eq('terreiro_id', orgId).order('nome'),
+        supabase.from('planos').select('id, nome, valor_centavos, dia_vencimento').eq('terreiro_id', orgId).order('nome'),
       ]);
 
-      if (assinaturasResult.error) throw assinaturasResult.error;
-      if (membrosResult.error) throw membrosResult.error;
-      if (planosResult.error) throw planosResult.error;
+      if (!membrosResult.error && membrosResult.data) setMembros(membrosResult.data);
+      if (!planosResult.error && planosResult.data) setPlanos(planosResult.data);
 
-      setAssinaturas(assinaturasResult.data?.map(a => ({
-        id: a.id,
-        inicio: a.inicio,
-        fim: a.fim,
-        status: a.status,
-        created_at: a.created_at,
-        membro: {
-          id: (a.membros as any)?.id || '',
-          nome: (a.membros as any)?.nome || 'N/A',
-          matricula: (a.membros as any)?.matricula,
-        },
-        plano: {
-          id: (a.planos as any)?.id || '',
-          nome: (a.planos as any)?.nome || 'N/A',
-          valor_centavos: (a.planos as any)?.valor_centavos || 0,
-        },
-      })) || []);
-      
-      setMembros(membrosResult.data || []);
-      setPlanos(planosResult.data || []);
-    } catch (error) {
+      const assinaturasResult = await supabase
+        .from('assinaturas')
+        .select(`
+          id,
+          inicio,
+          fim,
+          dt_fim,
+          status,
+          created_at,
+          membros:membro_id ( id, nome, matricula ),
+          planos:plano_id ( id, nome, valor_centavos, dia_vencimento )
+        `)
+        .or(`org_id.eq.${orgId},terreiro_id.eq.${orgId}`)
+        .order('created_at', { ascending: false });
+
+      if (!assinaturasResult.error && assinaturasResult.data) {
+        setAssinaturas(
+          assinaturasResult.data.map((a: any) => {
+            const fimNorm = a.dt_fim ?? a.fim ?? null;
+            return {
+              id: a.id,
+              inicio: ymd(a.inicio),
+              fim: fimNorm ? ymd(fimNorm) : null,
+              status: a.status,
+              created_at: a.created_at,
+              membro: {
+                id: a.membros?.id || '',
+                nome: a.membros?.nome || 'N/A',
+                matricula: a.membros?.matricula,
+              },
+              plano: {
+                id: a.planos?.id || '',
+                nome: a.planos?.nome || 'N/A',
+                valor_centavos: a.planos?.valor_centavos || 0,
+              },
+            } as Assinatura;
+          })
+        );
+      }
+    } catch (err: any) {
+      console.error(err);
       toast({
-        title: "Erro ao carregar dados",
-        description: "Tente recarregar a página",
-        variant: "destructive",
+        title: 'Erro ao carregar dados',
+        description: err?.message ?? 'Tente recarregar a página',
+        variant: 'destructive',
       });
     } finally {
       setLoading(false);
     }
   };
 
-  const resetForm = () => {
+  // ---------- form actions ----------
+  const openNewDialog = () => {
+    setEditingAssinatura(null);
+    originalPlanoIdRef.current = null;
     setFormData({
       membro_id: '',
       plano_id: '',
       inicio: new Date().toISOString().split('T')[0],
+      tem_fim: false,
       fim: '',
       status: 'ativa',
     });
-    setEditingAssinatura(null);
+    setDialogOpen(true);
   };
 
   const openEditDialog = (assinatura: Assinatura) => {
+    const inicio = ymd(assinatura.inicio);
+    const fim = assinatura.fim ? ymd(assinatura.fim) : '';
     setFormData({
       membro_id: assinatura.membro.id,
       plano_id: assinatura.plano.id,
-      inicio: assinatura.inicio,
-      fim: assinatura.fim || '',
+      inicio,
+      tem_fim: Boolean(fim),
+      fim,
       status: assinatura.status,
     });
+    originalPlanoIdRef.current = assinatura.plano.id;
     setEditingAssinatura(assinatura);
     setDialogOpen(true);
   };
 
+  // tenta com terreiro_id = orgId; se FK falhar, tenta com auth.user.id
+  const buildPayload = (orgId: string, terreiroId: string) => {
+    const fimValue = formData.tem_fim && formData.fim ? formData.fim : null;
+    return {
+      membro_id: formData.membro_id,
+      plano_id: formData.plano_id,
+      inicio: formData.inicio,
+      fim: fimValue,
+      dt_fim: fimValue,
+      status: formData.status,
+      org_id: orgId,
+      terreiro_id: terreiroId,
+    };
+  };
+
+  /** Aplica novo plano às faturas em aberto dessa assinatura.
+   *  1) tenta RPC apply_plano_to_open_faturas (p_assinatura_id ou p_plano_id);
+   *  2) fallback: atualiza cliente (valor + dia de vencimento). */
+  const applyPlanoToOpenFaturas = async (assinaturaId: string, newPlanoId: string, orgId: string) => {
+    try {
+      // tentar versão p_assinatura_id
+      let rpcErr: any | null = null;
+      const try1 = await supabase.rpc('apply_plano_to_open_faturas', { p_assinatura_id: assinaturaId }).catch(e => ({ error: e }));
+      if ((try1 as any)?.error) {
+        rpcErr = (try1 as any).error;
+        // tentar versão p_plano_id (compat)
+        const try2 = await supabase.rpc('apply_plano_to_open_faturas', { p_plano_id: newPlanoId }).catch(e => ({ error: e }));
+        if ((try2 as any)?.error) rpcErr = (try2 as any).error;
+        else rpcErr = null;
+      }
+      if (!rpcErr) {
+        toast({ title: 'Mensalidades atualizadas', description: 'Faturas em aberto foram ajustadas via RPC.' });
+        return;
+      }
+      // se caiu aqui, faz fallback
+      console.warn('RPC apply_plano_to_open_faturas indisponível. Aplicando fallback no cliente.');
+
+      // carregar dados do plano (valor + dia)
+      const { data: p, error: pErr } = await supabase
+        .from('planos')
+        .select('valor_centavos, dia_vencimento')
+        .eq('id', newPlanoId)
+        .single();
+      if (pErr || !p) throw new Error(pErr?.message ?? 'Plano não encontrado');
+
+      // buscar faturas em aberto dessa assinatura
+      const { data: fat, error: fErr } = await supabase
+        .from('faturas')
+        .select('id, dt_vencimento')
+        .eq('org_id', orgId)
+        .eq('assinatura_id', assinaturaId)
+        .in('status', ['pendente', 'vencida']);
+      if (fErr) throw fErr;
+
+      // atualizar uma a uma (dia do vencimento ajustado por mês)
+      const updates = (fat ?? []).map(async (row: any) => {
+        const d = new Date(row.dt_vencimento);
+        const novoDia = clampDiaDoMes(d.getFullYear(), d.getMonth() + 1, Number(p.dia_vencimento ?? 1));
+        const novoVencIso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(novoDia).padStart(2, '0')}`;
+        const valorCent = Number(p.valor_centavos || 0);
+        const valorDecimal = Number((valorCent / 100).toFixed(2));
+
+        return supabase
+          .from('faturas')
+          .update({
+            plano_id: newPlanoId,
+            valor_centavos: valorCent,
+            valor: valorDecimal,
+            dt_vencimento: novoVencIso,
+          } as any)
+          .eq('id', row.id);
+      });
+
+      await Promise.all(updates);
+
+      toast({ title: 'Mensalidades atualizadas', description: 'Faturas em aberto ajustadas (fallback).' });
+    } catch (e: any) {
+      console.error(e);
+      toast({
+        title: 'Falha ao aplicar novo plano',
+        description: e?.message ?? 'Tente novamente.',
+        variant: 'destructive',
+      });
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
-      const payload = {
-        membro_id: formData.membro_id,
-        plano_id: formData.plano_id,
-        inicio: formData.inicio,
-        fim: formData.fim || null,
-        status: formData.status,
-      };
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth?.user) throw new Error('Usuário não autenticado');
+
+      const { data: profile, error: profErr } = await supabase
+        .from('profiles')
+        .select('org_id')
+        .eq('user_id', auth.user.id)
+        .single();
+
+      if (profErr) throw profErr;
+      if (!profile?.org_id) throw new Error('org_id/terreiro não encontrado no profile');
+
+      const orgId = profile.org_id;
+      const userId = auth.user.id;
+
+      // 1ª tentativa com terreiro_id = orgId
+      let payload = buildPayload(orgId, orgId);
 
       if (editingAssinatura) {
-        const { error } = await supabase
-          .from('assinaturas')
-          .update(payload)
-          .eq('id', editingAssinatura.id);
-
+        let { error } = await supabase.from('assinaturas').update(payload).eq('id', editingAssinatura.id);
+        if (error && `${error.message}`.toLowerCase().includes('foreign key') && `${error.message}`.includes('terreiro_id')) {
+          payload = buildPayload(orgId, userId);
+          ({ error } = await supabase.from('assinaturas').update(payload).eq('id', editingAssinatura.id));
+        }
         if (error) throw error;
 
-        toast({
-          title: "Assinatura atualizada",
-          description: "A assinatura foi atualizada com sucesso",
-        });
+        // se o plano mudou, aplicar nas faturas em aberto desta assinatura
+        const originalPlanoId = originalPlanoIdRef.current;
+        if (originalPlanoId && originalPlanoId !== formData.plano_id) {
+          await applyPlanoToOpenFaturas(editingAssinatura.id, formData.plano_id, orgId);
+        }
+
+        toast({ title: 'Assinatura atualizada', description: 'A assinatura foi atualizada com sucesso' });
       } else {
-        const { error } = await supabase
-          .from('assinaturas')
-          .insert(payload);
-
+        let { data, error } = await supabase.from('assinaturas').insert(payload).select('id').single();
+        if (error && `${error.message}`.toLowerCase().includes('foreign key') && `${error.message}`.includes('terreiro_id')) {
+          payload = buildPayload(orgId, userId);
+          ({ data, error } = await supabase.from('assinaturas').insert(payload).select('id').single());
+        }
         if (error) throw error;
 
-        toast({
-          title: "Assinatura criada",
-          description: "A assinatura foi criada com sucesso",
-        });
+        // novo cadastro não precisa aplicar retroativamente (não há faturas antigas para essa assinatura)
+        toast({ title: 'Assinatura criada', description: 'A assinatura foi criada com sucesso' });
       }
 
       setDialogOpen(false);
-      resetForm();
-      loadData();
-    } catch (error) {
+      await loadData();
+    } catch (error: any) {
+      console.error(error);
       toast({
-        title: "Erro ao salvar assinatura",
-        description: "Verifique os dados e tente novamente",
-        variant: "destructive",
+        title: 'Erro ao salvar assinatura',
+        description: error?.message ?? 'Verifique os dados e tente novamente',
+        variant: 'destructive',
       });
     }
   };
 
   const handleDelete = async (assinatura: Assinatura) => {
     try {
-      const { error } = await supabase
-        .from('assinaturas')
-        .delete()
-        .eq('id', assinatura.id);
-
+      const { error } = await supabase.from('assinaturas').delete().eq('id', assinatura.id);
       if (error) throw error;
 
+      toast({ title: 'Assinatura excluída', description: 'A assinatura foi excluída do sistema' });
+      await loadData();
+    } catch (error: any) {
       toast({
-        title: "Assinatura excluída",
-        description: "A assinatura foi excluída do sistema",
-      });
-
-      loadData();
-    } catch (error) {
-      toast({
-        title: "Erro ao excluir assinatura",
-        description: "Tente novamente",
-        variant: "destructive",
+        title: 'Erro ao excluir assinatura',
+        description: error?.message ?? 'Tente novamente',
+        variant: 'destructive',
       });
     }
   };
 
-  const formatCurrency = (centavos: number) => {
-    return new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL'
-    }).format(centavos / 100);
-  };
-
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, "default" | "secondary" | "destructive"> = {
-      'ativa': 'default',
-      'pausada': 'secondary',
-      'cancelada': 'destructive'
-    };
-
-    return (
-      <Badge variant={variants[status] || 'secondary'}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
-      </Badge>
-    );
-  };
-
-  const filteredAssinaturas = assinaturas.filter(assinatura => {
-    const matchesSearch = assinatura.membro.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         (assinatura.membro.matricula && assinatura.membro.matricula.toLowerCase().includes(searchTerm.toLowerCase())) ||
-                         assinatura.plano.nome.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || assinatura.status === statusFilter;
+  // ---------- filters ----------
+  const filteredAssinaturas = assinaturas.filter((a) => {
+    const s = searchTerm.toLowerCase();
+    const matchesSearch =
+      a.membro.nome.toLowerCase().includes(s) ||
+      (a.membro.matricula && a.membro.matricula.toLowerCase().includes(s)) ||
+      a.plano.nome.toLowerCase().includes(s);
+    const matchesStatus = statusFilter === 'all' || a.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
+  // ---------- render ----------
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -276,24 +414,23 @@ export default function Assinaturas() {
             </h1>
             <p className="text-muted-foreground">Gerencie as assinaturas de planos</p>
           </div>
-          
+
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button className="bg-gradient-sacred hover:opacity-90" onClick={resetForm}>
+              <Button className="bg-gradient-sacred hover:opacity-90" onClick={openNewDialog}>
                 <Plus className="h-4 w-4 mr-2" />
                 Nova Assinatura
               </Button>
             </DialogTrigger>
+
             <DialogContent className="max-w-md">
               <DialogHeader>
-                <DialogTitle>
-                  {editingAssinatura ? 'Editar Assinatura' : 'Nova Assinatura'}
-                </DialogTitle>
+                <DialogTitle>{editingAssinatura ? 'Editar Assinatura' : 'Nova Assinatura'}</DialogTitle>
                 <DialogDescription>
                   {editingAssinatura ? 'Atualize os dados da assinatura' : 'Vincule um membro a um plano'}
                 </DialogDescription>
               </DialogHeader>
-              
+
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="membro_id">Membro *</Label>
@@ -310,7 +447,7 @@ export default function Assinaturas() {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="plano_id">Plano *</Label>
                   <Select value={formData.plano_id} onValueChange={(value) => setFormData({ ...formData, plano_id: value })}>
@@ -320,13 +457,13 @@ export default function Assinaturas() {
                     <SelectContent className="bg-popover border-border">
                       {planos.map((plano) => (
                         <SelectItem key={plano.id} value={plano.id}>
-                          {plano.nome} - {formatCurrency(plano.valor_centavos)}
+                          {plano.nome} — {formatCurrency(plano.valor_centavos)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="inicio">Data de início *</Label>
                   <Input
@@ -337,17 +474,33 @@ export default function Assinaturas() {
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
-                  <Label htmlFor="fim">Data de fim (opcional)</Label>
-                  <Input
-                    id="fim"
-                    type="date"
-                    value={formData.fim}
-                    onChange={(e) => setFormData({ ...formData, fim: e.target.value })}
-                  />
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="tem_fim">Tem data fim?</Label>
+                    <Switch
+                      id="tem_fim"
+                      checked={formData.tem_fim}
+                      onCheckedChange={(checked) =>
+                        setFormData((f) => ({ ...f, tem_fim: checked, fim: checked ? f.fim : '' }))
+                      }
+                    />
+                  </div>
+                  {formData.tem_fim && (
+                    <>
+                      <Label htmlFor="fim" className="sr-only">
+                        Data de fim
+                      </Label>
+                      <Input
+                        id="fim"
+                        type="date"
+                        value={formData.fim}
+                        onChange={(e) => setFormData({ ...formData, fim: e.target.value })}
+                      />
+                    </>
+                  )}
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="status">Status *</Label>
                   <Select value={formData.status} onValueChange={(value) => setFormData({ ...formData, status: value })}>
@@ -361,7 +514,7 @@ export default function Assinaturas() {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="flex justify-end space-x-2">
                   <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
                     Cancelar
@@ -411,13 +564,14 @@ export default function Assinaturas() {
         <Card className="bg-card/30 backdrop-blur-sm">
           <CardHeader>
             <CardTitle>
-              {filteredAssinaturas.length} assinatura{filteredAssinaturas.length !== 1 ? 's' : ''} encontrada{filteredAssinaturas.length !== 1 ? 's' : ''}
+              {filteredAssinaturas.length} assinatura{filteredAssinaturas.length !== 1 ? 's' : ''} encontrada
+              {filteredAssinaturas.length !== 1 ? 's' : ''}
             </CardTitle>
           </CardHeader>
           <CardContent>
             {loading ? (
               <div className="space-y-4">
-                {[1, 2, 3].map(i => (
+                {[1, 2, 3].map((i) => (
                   <div key={i} className="h-16 bg-muted/20 rounded animate-pulse" />
                 ))}
               </div>
@@ -440,25 +594,20 @@ export default function Assinaturas() {
                       <TableCell className="font-medium">
                         {assinatura.membro.nome}
                         {assinatura.membro.matricula && (
-                          <div className="text-xs text-muted-foreground">
-                            {assinatura.membro.matricula}
-                          </div>
+                          <div className="text-xs text-muted-foreground">{assinatura.membro.matricula}</div>
                         )}
                       </TableCell>
                       <TableCell>{assinatura.plano.nome}</TableCell>
                       <TableCell className="font-semibold text-secondary">
                         {formatCurrency(assinatura.plano.valor_centavos)}
                       </TableCell>
-                      <TableCell>
-                        {new Date(assinatura.inicio).toLocaleDateString('pt-BR')}
-                      </TableCell>
-                      <TableCell>
-                        {assinatura.fim ? new Date(assinatura.fim).toLocaleDateString('pt-BR') : '-'}
-                      </TableCell>
+                      <TableCell>{new Date(assinatura.inicio).toLocaleDateString('pt-BR')}</TableCell>
+                      <TableCell>{assinatura.fim ? new Date(assinatura.fim).toLocaleDateString('pt-BR') : '—'}</TableCell>
                       <TableCell>{getStatusBadge(assinatura.status)}</TableCell>
                       <TableCell>
                         <div className="flex items-center space-x-2">
                           <Button
+                            type="button"
                             size="sm"
                             variant="outline"
                             onClick={() => openEditDialog(assinatura)}
@@ -466,9 +615,15 @@ export default function Assinaturas() {
                           >
                             <Edit className="h-3 w-3" />
                           </Button>
+
                           <AlertDialog>
                             <AlertDialogTrigger asChild>
-                              <Button size="sm" variant="outline" className="hover:bg-destructive hover:text-destructive-foreground">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="hover:bg-destructive hover:text-destructive-foreground"
+                              >
                                 <Trash2 className="h-3 w-3" />
                               </Button>
                             </AlertDialogTrigger>
