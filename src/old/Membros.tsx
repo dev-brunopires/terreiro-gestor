@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -28,7 +28,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Search, Edit, Trash2, Users, FileBadge2, Flower2 } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, Users, FileBadge2, Flower2, UserPlus2 } from 'lucide-react';
 
 /* shadcn/ui Select */
 import {
@@ -55,39 +55,15 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
-/* ----------------------- util hooks (anti-reload, UX) ----------------------- */
-function useDebounced<T>(value: T, delay = 300) {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setV(value), delay);
-    return () => clearTimeout(id);
-  }, [value, delay]);
-  return v;
-}
-
-function usePageVisibility() {
-  const [visible, setVisible] = useState(typeof document === 'undefined' ? true : document.visibilityState !== 'hidden');
-  useEffect(() => {
-    const onVis = () => setVisible(document.visibilityState !== 'hidden');
-    document.addEventListener('visibilitychange', onVis);
-    window.addEventListener('focus', onVis);
-    window.addEventListener('blur', onVis); // mantém o último estado estável
-    return () => {
-      document.removeEventListener('visibilitychange', onVis);
-      window.removeEventListener('focus', onVis);
-      window.removeEventListener('blur', onVis);
-    };
-  }, []);
-  return visible;
-}
-/* --------------------------------------------------------------------------- */
-
 // ----------------------- Tipos -----------------------
+
 type TipoPessoa = 'PF' | 'PJ';
+
 type Role = 'viewer' | 'operador' | 'financeiro' | 'admin' | 'owner';
 
 interface Membro {
   id: string;
+  // org atual (substitui terreiro_id no schema novo)
   org_id: string;
   nome: string;
   matricula?: string | null;
@@ -99,21 +75,28 @@ interface Membro {
   cep?: string | null;
   data_admissao_terreiro?: string | null;
   ativo: boolean;
-  observacoes?: any | null;
+  observacoes?: any | null; // jsonb no novo schema
   created_at: string;
   updated_at?: string | null;
+
+  // novos campos alinhados ao schema
   cidade?: string | null;
   uf?: string | null;
   numero?: string | null;
   complemento?: string | null;
   profissao?: string | null;
+
+  // jsonb
   espiritual_umbanda?: any | null;
   espiritual_candomble?: any | null;
   docs?: any | null;
   tipo_pessoa?: TipoPessoa | null;
 }
 
-interface Terreiro { id: string; nome: string; }
+interface Terreiro {
+  id: string;
+  nome: string;
+}
 
 interface Plano {
   id: string;
@@ -125,32 +108,31 @@ interface Plano {
   org_id?: string | null;
 }
 
-/** --- Componente de grid reutilizável --- */
+/** ---------- FIX: componente estável fora do componente principal ---------- */
 function TextGrid({ children }: { children: React.ReactNode }) {
   return <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{children}</div>;
 }
+/** ------------------------------------------------------------------------ */
 
 export default function Membros() {
   const { toast } = useToast();
-  const isVisible = usePageVisibility();
 
-  // evita duplo bootstrap em StrictMode/dev
-  const didInitRef = useRef(false);
-  const mountedRef = useRef(true);
-
+  // SEMPRE id da tabela public.terreiros (org)
   const [orgId, setOrgId] = useState<string | null>(null);
   const [orgNome, setOrgNome] = useState<string>('');
+
   const [terreiros, setTerreiros] = useState<Terreiro[]>([]);
-  const [selectedTerreiroId, setSelectedTerreiroId] = useState<string>('');
+  const [selectedTerreiroId, setSelectedTerreiroId] = useState<string>(''); // usado no form (= org_id)
+
   const [membros, setMembros] = useState<Membro[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState('');
-  const debouncedSearch = useDebounced(searchTerm, 400);
-
   const [showActiveOnly, setShowActiveOnly] = useState(true);
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingMembro, setEditingMembro] = useState<Membro | null>(null);
+
   const [tab, setTab] = useState('principal');
 
   const [formData, setFormData] = useState({
@@ -169,10 +151,22 @@ export default function Membros() {
     profissao: '',
     data_admissao_terreiro: '',
     ativo: true,
-    observacoes: '',
+    observacoes: '', // string no form; salvo como jsonb no payload
     tipo_pessoa: 'PF' as TipoPessoa,
-    docs_pf: { cpf: '', rg: '', orgao_emissor: '', dt_emissao: '' },
-    docs_pj: { razao_social: '', cnpj: '', ie: '', im: '' },
+    // documentação
+    docs_pf: {
+      cpf: '',
+      rg: '',
+      orgao_emissor: '',
+      dt_emissao: '',
+    },
+    docs_pj: {
+      razao_social: '',
+      cnpj: '',
+      ie: '',
+      im: '',
+    },
+    // espiritual (Umbanda)
     umbanda: {
       orixas: ['', '', '', ''],
       pretoVelho: ['', ''],
@@ -182,6 +176,7 @@ export default function Membros() {
       ere: ['', ''],
       outros: '',
     },
+    // espiritual (Candomblé)
     candomble: {
       orixas: [
         { nome: '', qualidade: '' },
@@ -198,21 +193,20 @@ export default function Membros() {
     },
   });
 
+  // Planos
   const [planos, setPlanos] = useState<Plano[]>([]);
-  const [selectedPlanoId, setSelectedPlanoId] = useState<string>('');
+  const [selectedPlanoId, setSelectedPlanoId] = useState<string>(''); // plano escolhido no form
+
+  // (NOVO) opções para criar login imediatamente
   const [criarLoginAgora, setCriarLoginAgora] = useState(false);
   const [roleNovoUsuario, setRoleNovoUsuario] = useState<Role>('viewer');
-
-  useEffect(() => {
-    return () => { mountedRef.current = false; };
-  }, []);
 
   // -------- helpers ----------
   const normalize = (v: string) => (v?.trim() ? v.trim() : null);
   const normalizeDate = (v: string) => (v ? v : null);
 
   const buildPayload = (finalOrgId: string) => ({
-    org_id: finalOrgId,
+    org_id: finalOrgId, // <-- novo: membros.org_id
     nome: formData.nome.trim(),
     matricula: normalize(formData.matricula),
     dt_nascimento: normalizeDate(formData.dt_nascimento),
@@ -228,6 +222,7 @@ export default function Membros() {
     profissao: normalize(formData.profissao || ''),
     data_admissao_terreiro: normalizeDate(formData.data_admissao_terreiro),
     ativo: formData.ativo,
+    // observacoes virou jsonb
     observacoes: formData.observacoes?.trim()
       ? { texto: formData.observacoes.trim() }
       : null,
@@ -255,6 +250,7 @@ export default function Membros() {
     },
   });
 
+  // garante que teremos um terreiro existente (pega do profile; senão, RPC cria/reutiliza)
   const ensureValidOrgId = async (): Promise<string> => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('Usuário não autenticado');
@@ -276,8 +272,12 @@ export default function Membros() {
     };
 
     if (!(await exists(org))) {
-      const { data: ensured, error: rpcErr } = await supabase.rpc('ensure_default_org', { p_nome: 'Xango Menino' });
-      if (rpcErr || !ensured) throw new Error(rpcErr?.message ?? 'Falha ao garantir terreiro padrão');
+      const { data: ensured, error: rpcErr } = await supabase.rpc('ensure_default_org', {
+        p_nome: 'Xango Menino',
+      });
+      if (rpcErr || !ensured) {
+        throw new Error(rpcErr?.message ?? 'Falha ao garantir terreiro padrão');
+      }
       org = ensured as string;
 
       const { data: terrNome } = await supabase
@@ -292,10 +292,8 @@ export default function Membros() {
     return org!;
   };
 
+  // carrega membros
   const loadMembros = async () => {
-    // NÃO roda se a aba não estiver visível — evita “saltos” ao minimizar/alternar
-    if (!isVisible) return;
-
     try {
       setLoading(true);
 
@@ -304,19 +302,20 @@ export default function Membros() {
         .select('*')
         .order('nome', { ascending: true });
 
+      // isola por org atual (UX e segurança) — agora é org_id
       if (orgId) query = query.eq('org_id', orgId);
 
-      const term = debouncedSearch.trim();
-      if (term) {
-        const q = `%${term}%`;
+      if (searchTerm.trim()) {
+        const q = `%${searchTerm.trim()}%`;
         query = query.or(`nome.ilike.${q},matricula.ilike.${q}`);
       }
-      if (showActiveOnly) query = query.eq('ativo', true);
+      if (showActiveOnly) {
+        query = query.eq('ativo', true);
+      }
 
       const { data, error } = await query;
       if (error) throw error;
-
-      if (mountedRef.current) setMembros(data || []);
+      setMembros(data || []);
     } catch (error: any) {
       toast({
         title: 'Erro ao carregar membros',
@@ -324,10 +323,11 @@ export default function Membros() {
         variant: 'destructive',
       });
     } finally {
-      if (mountedRef.current) setLoading(false);
+      setLoading(false);
     }
   };
 
+  // carregar planos (apenas ativos) por org/terreiro
   const loadPlanosByTerreiro = async (terreiroId: string) => {
     if (!terreiroId) { setPlanos([]); return; }
 
@@ -339,18 +339,33 @@ export default function Membros() {
       .order('nome', { ascending: true });
 
     if (error) {
-      toast({ title: 'Erro ao carregar planos', description: error.message, variant: 'destructive' });
+      console.error(error);
+      toast({
+        title: 'Erro ao carregar planos',
+        description: error.message,
+        variant: 'destructive',
+      });
       setPlanos([]);
       return;
     }
 
     setPlanos(data || []);
-    if (!data?.some(p => p.id === selectedPlanoId)) setSelectedPlanoId('');
+    if (!data?.some(p => p.id === selectedPlanoId)) {
+      setSelectedPlanoId('');
+    }
   };
 
   // ---------- utils de cobrança ----------
-  const endOfMonthDay = (y: number, mZeroBased: number) => new Date(y, mZeroBased + 1, 0).getDate();
-  const clampDay = (y: number, mZeroBased: number, d: number) => Math.min(d, endOfMonthDay(y, mZeroBased));
+  const endOfMonthDay = (y: number, mZeroBased: number) => {
+    // mZeroBased: 0..11
+    return new Date(y, mZeroBased + 1, 0).getDate();
+  };
+
+  const clampDay = (y: number, mZeroBased: number, d: number) => {
+    const last = endOfMonthDay(y, mZeroBased);
+    return Math.min(d, last);
+  };
+
   const iso = (d: Date) => d.toISOString().slice(0, 10);
 
   const compute24DueDates = (startISO: string, diaVenc: number): string[] => {
@@ -358,18 +373,29 @@ export default function Membros() {
     const y0 = start.getFullYear();
     const m0 = start.getMonth();
     const day = start.getDate();
-    let firstYear = y0, firstMonth = m0;
+
+    // decide primeira competência
+    let firstYear = y0;
+    let firstMonth = m0;
     if (day > diaVenc) {
+      // passa para mês seguinte
       firstMonth += 1;
-      if (firstMonth > 11) { firstMonth = 0; firstYear += 1; }
+      if (firstMonth > 11) {
+        firstMonth = 0;
+        firstYear += 1;
+      }
     }
     const dates: string[] = [];
-    let y = firstYear, m = firstMonth;
+    let y = firstYear;
+    let m = firstMonth;
     for (let i = 0; i < 24; i++) {
       const d = clampDay(y, m, diaVenc);
       dates.push(iso(new Date(y, m, d)));
       m += 1;
-      if (m > 11) { m = 0; y += 1; }
+      if (m > 11) {
+        m = 0;
+        y += 1;
+      }
     }
     return dates;
   };
@@ -379,6 +405,7 @@ export default function Membros() {
     const clean = email.trim().toLowerCase();
     const { data: { user } } = await supabase.auth.getUser();
 
+    // evita convites duplicados simples (mesmo org+email pendente)
     const { data: existing } = await supabase
       .from('org_invites')
       .select('id, status')
@@ -406,6 +433,7 @@ export default function Membros() {
   }) => {
     const { assinatura_id, membro_id, plano_id, org, inicioISO } = params;
 
+    // tenta achar o plano em memória; se não achar, busca
     let plano = planos.find(p => p.id === plano_id) as Plano | undefined;
     if (!plano) {
       const { data } = await supabase
@@ -421,6 +449,7 @@ export default function Membros() {
     const valorCent = Number(plano.valor_centavos || 0);
     const valorNum = Math.round(valorCent) / 100;
 
+    // monta o payload em lote
     const rows = dueDates.map((dt) => ({
       assinatura_id,
       membro_id,
@@ -430,15 +459,19 @@ export default function Membros() {
       data_vencimento: dt,
       dt_vencimento: dt,
       status: 'pendente',
-      terreiro_id: org,
-      org_id: org,
+      terreiro_id: org, // compat
+      org_id: org,      // novo
     }));
 
     const { error } = await supabase.from('faturas').insert(rows);
     if (error) throw error;
   };
 
-  const promoteToUser = async (membro: Membro, role: Role = 'viewer') => {
+  // ---------- PROMOVER MEMBRO A USUÁRIO (Edge Function) ----------
+  const promoteToUser = async (
+    membro: Membro,
+    role: 'viewer' | 'operador' | 'financeiro' | 'admin' | 'owner' = 'viewer'
+  ) => {
     try {
       const org = orgId ?? (await ensureValidOrgId());
       if (!membro?.id) throw new Error('Membro inválido');
@@ -448,7 +481,7 @@ export default function Membros() {
       }
 
       const { data, error } = await supabase.functions.invoke('create-user', {
-        body: { membro_id: membro.id, org_id: org, role },
+      body: { membro_id: membro.id, org_id: org, role },
       });
       if (error) throw error;
 
@@ -460,7 +493,7 @@ export default function Membros() {
       let desc = e?.message ?? 'Tente novamente';
       try {
         const body = e?.context?.body;
-        if (body && typeof body.getReader === 'function') {
+        if (body && typeof body.getReader === "function") {
           const txt = await new Response(body).text();
           desc = (() => { try { const j = JSON.parse(txt); return j.error || j.message || txt; } catch { return txt; } })();
         }
@@ -469,18 +502,17 @@ export default function Membros() {
     }
   };
 
-  // ---------- bootstrap único (anti-reload em troca/minimização de aba) ----------
-  useEffect(() => {
-    if (didInitRef.current) return;
-    didInitRef.current = true;
 
-    (async () => {
+  // ---------- bootstrap ----------
+  useEffect(() => {
+    const init = async () => {
       try {
-        const { data: { user} } = await supabase.auth.getUser();
+        const { data: { user } } = await supabase.auth.getUser();
         if (!user) { setLoading(false); return; }
 
         const validOrg = await ensureValidOrgId();
 
+        // carrega terreiros para o Select
         const { data: ts, error: tErr } = await supabase
           .from('terreiros')
           .select('id, nome')
@@ -488,26 +520,30 @@ export default function Membros() {
 
         if (tErr) throw tErr;
         setTerreiros(ts || []);
+
+        // default do select = org atual
         setSelectedTerreiroId(validOrg);
       } catch (e: any) {
+        console.error(e);
         toast({
           title: 'Erro ao iniciar tela',
           description: e?.message ?? 'Tente novamente',
           variant: 'destructive',
         });
       } finally {
-        if (mountedRef.current) setLoading(false);
+        setLoading(false);
       }
-    })();
+    };
+    init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // recarrega lista quando filtros mudam — mas só se estiver visível
+  // recarrega lista quando filtros/org mudarem
   useEffect(() => {
     if (!orgId) return;
     loadMembros();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId, debouncedSearch, showActiveOnly, isVisible]);
+  }, [orgId, searchTerm, showActiveOnly]);
 
   // quando abrir o diálogo ou trocar o terreiro no form, carregue os planos
   useEffect(() => {
@@ -524,13 +560,14 @@ export default function Membros() {
       const { data, error } = await supabase
         .from('membros')
         .select('matricula')
-        .eq('org_id', terreiroId)
+        .eq('org_id', terreiroId) // <--- agora por org_id
         .not('matricula', 'is', null)
         .order('matricula', { ascending: false })
         .limit(1);
       if (error) throw error;
 
       const ultima = data?.[0]?.matricula || '';
+      // formatos aceitos: '2024-001', '000123', '123'
       let proxima = '';
       const m = /^(\d{4})-(\d+)$/.exec(ultima);
       if (m) {
@@ -599,11 +636,13 @@ export default function Membros() {
     setEditingMembro(null);
     setSelectedPlanoId('');
     setTab('principal');
+    // reset dos controles de criação de login
     setCriarLoginAgora(false);
     setRoleNovoUsuario('viewer');
   };
 
   const openEditDialog = (membro: Membro) => {
+    // observacoes jsonb -> string do form
     const obsString =
       typeof membro.observacoes === 'string'
         ? membro.observacoes
@@ -673,6 +712,7 @@ export default function Membros() {
     setSelectedTerreiroId(membro.org_id ?? orgId ?? '');
     setEditingMembro(membro);
     setTab('principal');
+    // ao editar, não criar login por padrão
     setCriarLoginAgora(false);
     setRoleNovoUsuario('viewer');
     setDialogOpen(true);
@@ -685,6 +725,7 @@ export default function Membros() {
       const validOrg = await ensureValidOrgId();
       const chosen = selectedTerreiroId || validOrg;
 
+      // valida se o terreiro escolhido existe
       const { data: terr } = await supabase
         .from('terreiros')
         .select('id')
@@ -702,11 +743,15 @@ export default function Membros() {
       const payload = buildPayload(chosen);
 
       if (editingMembro) {
-        const { error } = await supabase.from('membros').update(payload).eq('id', editingMembro.id);
+        const { error } = await supabase
+          .from('membros')
+          .update(payload)
+          .eq('id', editingMembro.id);
         if (error) throw error;
 
         toast({ title: 'Membro atualizado', description: `${payload.nome} foi atualizado com sucesso` });
       } else {
+        // inserir e retornar o registro criado para pegar o id
         const { data: created, error } = await supabase
           .from('membros')
           .insert(payload)
@@ -715,22 +760,30 @@ export default function Membros() {
 
         if (error) throw error;
 
+        // 1) Se NÃO for criar login agora, manda convite (viewer) se tiver e-mail
         if (!criarLoginAgora) {
-          try { await createViewerInviteIfEmail(chosen, formData.email); } catch {}
+          try {
+            await createViewerInviteIfEmail(chosen, formData.email);
+          } catch (invErr: any) {
+            // não bloqueia fluxo
+            console.warn('Falha ao criar convite viewer:', invErr?.message);
+          }
         }
 
+        // 2) criar assinatura automática se escolheu plano (novo schema)
         if (selectedPlanoId) {
-          const inicioDate = (formData.data_admissao_terreiro?.trim()
-            ? formData.data_admissao_terreiro
-            : new Date().toISOString().slice(0, 10));
+          const inicioDate =
+            (formData.data_admissao_terreiro?.trim()
+              ? formData.data_admissao_terreiro
+              : new Date().toISOString().slice(0, 10));
 
           const { data: assinatura, error: subErr } = await supabase
             .from('assinaturas')
             .insert({
               membro_id: created.id,
               plano_id: selectedPlanoId,
-              terreiro_id: chosen,
-              org_id: chosen,
+              terreiro_id: chosen, // compat
+              org_id: chosen,      // novo
               inicio: inicioDate,
               status: 'ativa',
               ativo: true,
@@ -745,6 +798,7 @@ export default function Membros() {
               variant: 'destructive',
             });
           } else {
+            // 3) gerar 24 faturas
             try {
               await generate24Invoices({
                 assinatura_id: assinatura.id,
@@ -767,6 +821,7 @@ export default function Membros() {
           }
         }
 
+        // 4) Criar login imediatamente (Edge promote-member-to-user)
         if (criarLoginAgora) {
           const emailOk = !!formData.email && /\S+@\S+\.\S+/.test(formData.email);
           if (!emailOk) {
@@ -785,8 +840,7 @@ export default function Membros() {
 
       setDialogOpen(false);
       resetForm();
-      // carrega somente se visível — evita “piscadas” ao voltar para a aba
-      if (isVisible) loadMembros();
+      loadMembros();
     } catch (error: any) {
       toast({
         title: 'Erro ao salvar membro',
@@ -798,11 +852,14 @@ export default function Membros() {
 
   const handleDelete = async (membro: Membro) => {
     try {
-      const { error } = await supabase.from('membros').delete().eq('id', membro.id);
+      const { error } = await supabase
+        .from('membros')
+        .delete()
+        .eq('id', membro.id);
       if (error) throw error;
 
       toast({ title: 'Membro excluído', description: `${membro.nome} foi excluído do sistema` });
-      if (isVisible) loadMembros();
+      loadMembros();
     } catch (error: any) {
       toast({
         title: 'Erro ao excluir membro',
@@ -813,7 +870,7 @@ export default function Membros() {
   };
 
   const filteredMembros = useMemo(() => {
-    const term = debouncedSearch.toLowerCase().trim();
+    const term = searchTerm.toLowerCase().trim();
     return membros.filter((m) => {
       const matchesSearch =
         m.nome.toLowerCase().includes(term) ||
@@ -821,8 +878,9 @@ export default function Membros() {
       const matchesActive = showActiveOnly ? m.ativo : true;
       return matchesSearch && matchesActive;
     });
-  }, [membros, debouncedSearch, showActiveOnly]);
+  }, [membros, searchTerm, showActiveOnly]);
 
+  // Opções fixas de obrigações (Candomblé)
   const OBRIGACOES = ['Bori', 'Yawo', 'Vodunsei', 'Egbomi'];
 
   return (
@@ -871,8 +929,8 @@ export default function Membros() {
               </Button>
             </div>
 
-            {/* responsivo + z-index alto */}
-            <DialogContent className="w-full max-w-[95vw] md:max-w-[52vw] max-h-[92vh] overflow-y-auto z-[300]">
+            {/* z-index ALTO para o content e os dropdowns não ficarem atrás */}
+            <DialogContent className="w-[1100px] max-w-[52vw] max-h-[92vh] overflow-y-auto z-[300]">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   {editingMembro ? 'Editar Membro' : 'Novo Membro'}
@@ -885,12 +943,23 @@ export default function Membros() {
 
               <form onSubmit={handleSubmit} className="space-y-4">
                 <Tabs value={tab} onValueChange={setTab} className="w-full">
+
                   <TabsList className="mb-4 flex flex-wrap gap-2 justify-start border-b border-border/50">
-                    <TabsTrigger value="principal" className="px-4 py-1 rounded-lg">1. Principal</TabsTrigger>
-                    <TabsTrigger value="endereco" className="px-4 py-1 rounded-lg">2. Endereço & Profissão</TabsTrigger>
-                    <TabsTrigger value="umbanda" className="px-4 py-1 rounded-lg">3. Espiritual (Umbanda)</TabsTrigger>
-                    <TabsTrigger value="candomble" className="px-4 py-1 rounded-lg">4. Espiritual (Candomblé)</TabsTrigger>
-                    <TabsTrigger value="docs" className="px-4 py-1 rounded-lg">5. Documentação</TabsTrigger>
+                    <TabsTrigger value="principal" className="px-4 py-1 rounded-lg">
+                      1. Principal
+                    </TabsTrigger>
+                    <TabsTrigger value="endereco" className="px-4 py-1 rounded-lg">
+                      2. Endereço & Profissão
+                    </TabsTrigger>
+                    <TabsTrigger value="umbanda" className="px-4 py-1 rounded-lg">
+                      3. Espiritual (Umbanda)
+                    </TabsTrigger>
+                    <TabsTrigger value="candomble" className="px-4 py-1 rounded-lg">
+                      4. Espiritual (Candomblé)
+                    </TabsTrigger>
+                    <TabsTrigger value="docs" className="px-4 py-1 rounded-lg">
+                      5. Documentação
+                    </TabsTrigger>
                   </TabsList>
 
                   {/* Aba Principal */}
@@ -910,6 +979,7 @@ export default function Membros() {
                           <SelectTrigger id="terreiro">
                             <SelectValue placeholder="Selecione o terreiro" />
                           </SelectTrigger>
+                          {/* SelectContent com z-index alto e portal */}
                           <SelectContent className="z-[400]" position="popper" sideOffset={6}>
                             {orgId && (
                               <SelectItem value={orgId}>
@@ -925,7 +995,7 @@ export default function Membros() {
                         </Select>
                       </div>
 
-                      {/* Matrícula */}
+                      {/* Matrícula (auto preenchida mas editável) */}
                       <div className="space-y-2">
                         <Label htmlFor="matricula">Matrícula</Label>
                         <Input
@@ -951,7 +1021,12 @@ export default function Membros() {
                       {/* Admissão */}
                       <div className="space-y-2">
                         <Label htmlFor="data_admissao_terreiro">Data de admissão</Label>
-                        <Input id="data_admissao_terreiro" type="date" value={formData.data_admissao_terreiro} onChange={(e) => setFormData({ ...formData, data_admissao_terreiro: e.target.value })} />
+                        <Input
+                          id="data_admissao_terreiro"
+                          type="date"
+                          value={formData.data_admissao_terreiro}
+                          onChange={(e) => setFormData({ ...formData, data_admissao_terreiro: e.target.value })}
+                        />
                       </div>
 
                       {/* Telefone */}
@@ -966,10 +1041,15 @@ export default function Membros() {
                         <Input id="email" type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} />
                       </div>
 
-                      {/* Criar login agora + Papel */}
+                      {/* Criar login agora + Papel (NOVO) */}
                       <div className="flex items-center gap-3 md:col-span-2">
-                        <Switch id="criar-login-agora" checked={criarLoginAgora} onCheckedChange={setCriarLoginAgora} />
+                        <Switch
+                          id="criar-login-agora"
+                          checked={criarLoginAgora}
+                          onCheckedChange={setCriarLoginAgora}
+                        />
                         <Label htmlFor="criar-login-agora">Criar login agora</Label>
+
                         <Select
                           disabled={!criarLoginAgora}
                           value={roleNovoUsuario}
@@ -995,7 +1075,7 @@ export default function Membros() {
                       <Textarea id="observacoes" value={formData.observacoes} onChange={(e) => setFormData({ ...formData, observacoes: e.target.value })} placeholder="Observações sobre o membro..." />
                     </div>
 
-                    {/* Plano */}
+                    {/* ---- Plano (ÚLTIMO CAMPO) ---- */}
                     <div className="space-y-2">
                       <Label htmlFor="plano">Plano de início</Label>
                       <Select value={selectedPlanoId} onValueChange={setSelectedPlanoId}>
@@ -1004,7 +1084,9 @@ export default function Membros() {
                         </SelectTrigger>
                         <SelectContent className="z-[400]" position="popper" sideOffset={6}>
                           {planos.map((p) => (
-                            <SelectItem key={p.id} value={p.id}>{p.nome}</SelectItem>
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.nome}
+                            </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -1014,7 +1096,7 @@ export default function Membros() {
                     </div>
                   </TabsContent>
 
-                  {/* Endereço & Profissão */}
+                  {/* Aba Endereço & Profissão */}
                   <TabsContent value="endereco" className="space-y-4">
                     <TextGrid>
                       <div className="space-y-2">
@@ -1052,13 +1134,14 @@ export default function Membros() {
                     </TextGrid>
                   </TabsContent>
 
-                  {/* Umbanda */}
+                  {/* Aba Umbanda */}
                   <TabsContent value="umbanda" className="space-y-4">
                     <div className="flex items-center gap-2">
                       <Flower2 className="h-4 w-4 text-primary" />
                       <span className="text-sm text-muted-foreground">Cadastre guias e Orixás de Umbanda</span>
                     </div>
 
+                    {/* Orixás (4 campos simples) */}
                     <div className="space-y-2">
                       <Label>Orixás</Label>
                       <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
@@ -1077,6 +1160,7 @@ export default function Membros() {
                       </div>
                     </div>
 
+                    {/* Guias: Preto Velho, Exu, Pomba Gira, Caboclo, Erê (cada um com 2 campos) */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {([
                         ['pretoVelho','Preto Velho'],
@@ -1115,7 +1199,7 @@ export default function Membros() {
                     </div>
                   </TabsContent>
 
-                  {/* Candomblé */}
+                  {/* Aba Candomblé */}
                   <TabsContent value="candomble" className="space-y-4">
                     <div className="space-y-2">
                       <Label>Orixás (com qualidade)</Label>
@@ -1162,7 +1246,7 @@ export default function Membros() {
                                 <SelectValue placeholder="Selecione" />
                               </SelectTrigger>
                               <SelectContent className="z-[400]">
-                                {['Bori','Yawo','Vodunsei','Egbomi'].map((n) => (<SelectItem key={`${n}-${i}`} value={n}>{n}</SelectItem>))}
+                                {OBRIGACOES.map((n) => (<SelectItem key={`${n}-${i}`} value={n}>{n}</SelectItem>))}
                               </SelectContent>
                             </Select>
                             <Input
@@ -1180,11 +1264,14 @@ export default function Membros() {
                     </div>
                   </TabsContent>
 
-                  {/* Documentação */}
+                  {/* Aba Documentação */}
                   <TabsContent value="docs" className="space-y-4">
                     <div className="space-y-2">
                       <Label>Tipo de pessoa</Label>
-                      <Select value={formData.tipo_pessoa} onValueChange={(v: any) => setFormData({ ...formData, tipo_pessoa: v as TipoPessoa })}>
+                      <Select
+                        value={formData.tipo_pessoa}
+                        onValueChange={(v: any) => setFormData({ ...formData, tipo_pessoa: v as TipoPessoa })}
+                      >
                         <SelectTrigger className="z-[400]">
                           <SelectValue />
                         </SelectTrigger>
@@ -1237,8 +1324,10 @@ export default function Membros() {
                   </TabsContent>
                 </Tabs>
 
-                <div className="flex justify-end gap-2 pt-2">
-                  <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
+                <div className="flex justify-end space-x-2 pt-2">
+                  <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+                    Cancelar
+                  </Button>
                   <Button type="submit" className="bg-gradient-sacred hover:opacity-90">
                     {editingMembro ? 'Atualizar' : 'Cadastrar'}
                   </Button>
@@ -1248,13 +1337,13 @@ export default function Membros() {
           </Dialog>
         </div>
 
-        {/* Filtros */}
+        {/* Filters */}
         <Card className="bg-card/50 backdrop-blur-sm">
           <CardContent className="pt-6">
             <div className="flex flex-col sm:flex-row gap-4">
               <div className="flex-1">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
                   <Input
                     placeholder="Buscar por nome ou matrícula..."
                     value={searchTerm}
@@ -1263,7 +1352,7 @@ export default function Membros() {
                   />
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center space-x-2">
                 <Switch id="showActive" checked={showActiveOnly} onCheckedChange={setShowActiveOnly} />
                 <Label htmlFor="showActive">Apenas ativos</Label>
               </div>
@@ -1271,7 +1360,7 @@ export default function Membros() {
           </CardContent>
         </Card>
 
-        {/* Lista responsiva: cards no mobile / tabela no desktop */}
+        {/* Members Table */}
         <Card className="bg-card/30 backdrop-blur-sm">
           <CardHeader>
             <CardTitle>
@@ -1286,191 +1375,102 @@ export default function Membros() {
                 ))}
               </div>
             ) : (
-              <>
-                {/* Mobile: cards */}
-                <div className="grid gap-3 md:hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border/50">
+                    <TableHead>Nome</TableHead>
+                    <TableHead>Matrícula</TableHead>
+                    <TableHead>Telefone</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="w-[1%] whitespace-nowrap text-right">Ações</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {filteredMembros.map((membro) => (
-                    <div key={membro.id} className="rounded-lg border border-border/50 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-semibold">{membro.nome}</div>
-                          <div className="text-sm text-muted-foreground">
-                            Matrícula: {membro.matricula || '-'}
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            {membro.telefone || '-'} • {membro.email || '-'}
-                          </div>
-                        </div>
+                    <TableRow key={membro.id} className="border-border/50">
+                      <TableCell className="font-medium">{membro.nome}</TableCell>
+                      <TableCell>{membro.matricula || '-'}</TableCell>
+                      <TableCell>{membro.telefone || '-'}</TableCell>
+                      <TableCell>{membro.email || '-'}</TableCell>
+                      <TableCell>
                         <Badge variant={membro.ativo ? 'default' : 'secondary'}>
                           {membro.ativo ? 'Ativo' : 'Inativo'}
                         </Badge>
-                      </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {/* Editar */}
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            onClick={() => openEditDialog(membro)}
+                            className="hover:bg-accent hover:text-accent-foreground"
+                            title="Editar"
+                          >
+                            <Edit className="h-4 w-4" />
+                            <span className="sr-only">Editar</span>
+                          </Button>
 
-                      <div className="mt-3 flex items-center justify-end gap-2">
-                        <Button
-                          size="icon"
-                          variant="outline"
-                          onClick={() => openEditDialog(membro)}
-                          className="hover:bg-accent hover:text-accent-foreground"
-                          title="Editar"
-                        >
-                          <Edit className="h-4 w-4" />
-                          <span className="sr-only">Editar</span>
-                        </Button>
-
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="outline"
-                              title={membro.email ? 'Tornar usuário' : 'Informe um e-mail para promover'}
-                              disabled={!membro.email}
-                            >
-                              <Users className="h-4 w-4" />
-                              <span className="sr-only">Tornar usuário</span>
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" side="top">
-                            {(['viewer','operador','financeiro','admin','owner'] as const).map((r) => (
-                              <DropdownMenuItem key={r} onClick={() => promoteToUser(membro, r)}>
-                                {r}
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="outline"
-                              className="hover:bg-destructive hover:text-destructive-foreground"
-                              title="Excluir"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                              <span className="sr-only">Excluir</span>
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Tem certeza que deseja excluir {membro.nome}? Esta ação não pode ser desfeita.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => handleDelete(membro)}
-                                className="bg-destructive hover:bg-destructive/90"
-                              >
-                                Excluir
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Desktop: tabela */}
-                <div className="hidden md:block overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-border/50">
-                        <TableHead>Nome</TableHead>
-                        <TableHead>Matrícula</TableHead>
-                        <TableHead>Telefone</TableHead>
-                        <TableHead>Email</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="w-[1%] whitespace-nowrap text-right">Ações</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredMembros.map((membro) => (
-                        <TableRow key={membro.id} className="border-border/50">
-                          <TableCell className="font-medium">{membro.nome}</TableCell>
-                          <TableCell>{membro.matricula || '-'}</TableCell>
-                          <TableCell>{membro.telefone || '-'}</TableCell>
-                          <TableCell>{membro.email || '-'}</TableCell>
-                          <TableCell>
-                            <Badge variant={membro.ativo ? 'default' : 'secondary'}>
-                              {membro.ativo ? 'Ativo' : 'Inativo'}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end gap-2">
+                          {/* Promover a usuário */}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
                               <Button
                                 size="icon"
                                 variant="outline"
-                                onClick={() => openEditDialog(membro)}
-                                className="hover:bg-accent hover:text-accent-foreground"
-                                title="Editar"
+                                title={membro.email ? 'Tornar usuário' : 'Informe um e-mail para promover'}
+                                disabled={!membro.email}
                               >
-                                <Edit className="h-4 w-4" />
-                                <span className="sr-only">Editar</span>
+                                <Users className="h-4 w-4" />
+                                <span className="sr-only">Tornar usuário</span>
                               </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" side="top">
+                              {(['viewer','operador','financeiro','admin','owner'] as const).map((r) => (
+                                <DropdownMenuItem key={r} onClick={() => promoteToUser(membro, r)}>
+                                  {r}
+                                </DropdownMenuItem>
+                              ))}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
 
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    size="icon"
-                                    variant="outline"
-                                    title={membro.email ? 'Tornar usuário' : 'Informe um e-mail para promover'}
-                                    disabled={!membro.email}
-                                  >
-                                    <Users className="h-4 w-4" />
-                                    <span className="sr-only">Tornar usuário</span>
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" side="top">
-                                  {(['viewer','operador','financeiro','admin','owner'] as const).map((r) => (
-                                    <DropdownMenuItem key={r} onClick={() => promoteToUser(membro, r)}>
-                                      {r}
-                                    </DropdownMenuItem>
-                                  ))}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-
-                              <AlertDialog>
-                                <AlertDialogTrigger asChild>
-                                  <Button
-                                    size="icon"
-                                    variant="outline"
-                                    className="hover:bg-destructive hover:text-destructive-foreground"
-                                    title="Excluir"
-                                  >
-                                    <Trash2 className="h-4 w-4" />
-                                    <span className="sr-only">Excluir</span>
-                                  </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                  <AlertDialogHeader>
-                                    <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                      Tem certeza que deseja excluir {membro.nome}? Esta ação não pode ser desfeita.
-                                    </AlertDialogDescription>
-                                  </AlertDialogHeader>
-                                  <AlertDialogFooter>
-                                    <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                    <AlertDialogAction
-                                      onClick={() => handleDelete(membro)}
-                                      className="bg-destructive hover:bg-destructive/90"
-                                    >
-                                      Excluir
-                                    </AlertDialogAction>
-                                  </AlertDialogFooter>
-                                </AlertDialogContent>
-                              </AlertDialog>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </>
+                          {/* Excluir */}
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="outline"
+                                className="hover:bg-destructive hover:text-destructive-foreground"
+                                title="Excluir"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                <span className="sr-only">Excluir</span>
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Tem certeza que deseja excluir {membro.nome}? Esta ação não pode ser desfeita.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => handleDelete(membro)}
+                                  className="bg-destructive hover:bg-destructive/90"
+                                >
+                                  Excluir
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
 
             {!loading && filteredMembros.length === 0 && (
@@ -1481,6 +1481,7 @@ export default function Membros() {
             )}
           </CardContent>
         </Card>
+
       </div>
     </DashboardLayout>
   );

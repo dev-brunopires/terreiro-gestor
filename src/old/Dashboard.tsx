@@ -1,6 +1,5 @@
 // src/pages/Dashboard.tsx
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -15,7 +14,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useOrg } from '@/contexts/OrgContext';
 
 type Role = 'owner' | 'admin' | 'viewer' | 'financeiro' | 'operador';
 
@@ -41,108 +39,103 @@ interface DashboardStats {
   atrasadas: number;             // qtd de faturas vencidas
 }
 
-type ProfileExtra = {
-  role: Role;
-  membro_id: string | null;
-};
-
-const todayISO = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-const monthBounds = () => {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0); // exclusivo
-  return { startISO: start.toISOString(), endISO: end.toISOString() };
-};
-const currentRef = () => {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  return `${y}${m}`; // 'YYYYMM'
-};
-const toInt = (v: any) => {
-  if (v === null || v === undefined) return 0;
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
-const formatCurrency = (centavos: number) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
-    (centavos ?? 0) / 100
-  );
-
 export default function Dashboard() {
-  const { toast } = useToast();
-  const { orgId, profile, loading: orgLoading } = useOrg();
-
-  // Carrega role/membro_id direto do banco (para não depender de shape do useOrg)
-  const profileQ = useQuery<ProfileExtra>({
-    queryKey: ['profile-extra'],
-    enabled: !orgLoading,
-    queryFn: async () => {
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth?.user) return { role: 'viewer', membro_id: null } as ProfileExtra;
-
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('role, membro_id')
-        .eq('user_id', auth.user.id)
-        .maybeSingle();
-
-      if (error) throw error;
-      return {
-        role: (data?.role ?? 'operador') as Role,
-        membro_id: (data as any)?.membro_id ?? null,
-      };
-    },
-    staleTime: 5 * 60_000,
-    refetchOnWindowFocus: false,
+  const [stats, setStats] = useState<DashboardStats>({
+    membrosAtivos: 0,
+    faturasAbertasMes: 0,
+    receitaMesMensalidades: 0,
+    receitaMesDiversos: 0,
+    receitaHojeMensalidades: 0,
+    receitaHojeDiversos: 0,
+    atrasadas: 0,
   });
+  const [ultimosPagamentos, setUltimosPagamentos] = useState<UltimoPagamento[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isViewer, setIsViewer] = useState<boolean>(false);
+  const [viewerHint, setViewerHint] = useState<string | null>(null); // quando viewer sem membro
+  const [viewerMatricula, setViewerMatricula] = useState<string | null>(null); // p/ filtrar diversos se necessário
+  const { toast } = useToast();
 
-  const isViewer = (profileQ.data?.role ?? profile?.role ?? 'operador') === 'viewer';
-  const membroIdViewer = isViewer ? (profileQ.data?.membro_id ?? null) : null;
+  useEffect(() => {
+    loadDashboardData();
+  }, []);
 
-  // Query principal do dashboard
-  const dashQ = useQuery<{
-    stats: DashboardStats;
-    ultimos: UltimoPagamento[];
-    viewerHint: string | null;
-    viewerMatricula: string | null;
-  }>({
-    queryKey: ['dashboard', orgId, isViewer, membroIdViewer],
-    enabled: !!orgId && !orgLoading && (!!membroIdViewer || !isViewer),
-    queryFn: async () => {
-      if (!orgId) throw new Error('Terreiro inválido');
+  const todayISO = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const monthBounds = () => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0); // exclusivo
+    return { startISO: start.toISOString(), endISO: end.toISOString() };
+  };
+
+  const currentRef = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    return `${y}${m}`; // 'YYYYMM'
+  };
+
+  const toInt = (v: any) => {
+    if (v === null || v === undefined) return 0;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const loadDashboardData = async () => {
+    try {
+      setLoading(true);
+
+      // 0) auth + profile
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth?.user) throw new Error('Usuário não autenticado');
+
+      const { data: profile, error: profErr } = await supabase
+        .from('profiles')
+        .select('org_id, role, membro_id')
+        .eq('user_id', auth.user.id)
+        .single();
+
+      if (profErr) throw profErr;
+
+      const role = (profile?.role ?? 'operador') as Role;
+      const isViewerRole = role === 'viewer';
+      setIsViewer(isViewerRole);
+
+      const orgId = profile!.org_id;
+      const membroIdViewer: string | null = isViewerRole ? (profile as any)?.membro_id ?? null : null;
+
+      // se viewer e sem vínculo a membro, exibe dica e evita quebrar
+      if (isViewerRole && !membroIdViewer) {
+        setViewerHint('Seu usuário é do tipo "viewer", mas ainda não está vinculado a um membro. Peça ao administrador para vincular seu acesso a um membro (Configurações → Usuários).');
+      }
+
+      // Se precisarmos da matrícula do viewer para filtrar "diversos"
+      let matriculaViewer: string | null = null;
+      if (isViewerRole && membroIdViewer) {
+        const { data: memb } = await supabase
+          .from('membros')
+          .select('matricula')
+          .eq('id', membroIdViewer)
+          .maybeSingle();
+        matriculaViewer = (memb as any)?.matricula ?? null;
+        setViewerMatricula(matriculaViewer);
+      }
 
       const { startISO, endISO } = monthBounds();
       const refMes = currentRef();
       const hoje = todayISO();
 
-      // 0) Se for viewer, tentamos obter matrícula do vínculo (pode ser útil para "diversos")
-      let viewerMatricula: string | null = null;
-      let viewerHint: string | null = null;
+      // ====== QUERIES BASE, COM BRANCH POR VIEWER OU NÃO ======
 
-      if (isViewer) {
-        if (!membroIdViewer) {
-          viewerHint =
-            'Seu usuário é do tipo "viewer", mas ainda não está vinculado a um membro. Peça ao administrador para vincular seu acesso a um membro (Configurações → Usuários).';
-        } else {
-          const { data: memb } = await supabase
-            .from('membros')
-            .select('matricula')
-            .eq('id', membroIdViewer)
-            .maybeSingle();
-          viewerMatricula = (memb as any)?.matricula ?? null;
-        }
-      }
-
-      // 1) membros ativos (contagem)
+      // 1) membros ativos
       const membrosQ = supabase
         .from('membros')
         .select('id', { count: 'exact', head: true })
         .eq('ativo', true)
         .or(`org_id.eq.${orgId},terreiro_id.eq.${orgId}`);
 
-      // 2) faturas em aberto do mês (contagem)
+      // 2) faturas em aberto do mês
       let faturasAbertasMesQ = supabase
         .from('faturas')
         .select('id', { count: 'exact', head: true })
@@ -150,14 +143,14 @@ export default function Dashboard() {
         .eq('refer', refMes)
         .in('status', ['pendente', 'vencida']);
 
-      // 3) faturas atrasadas (contagem)
+      // 7) faturas atrasadas (status = vencida)
       let atrasadasQ = supabase
         .from('faturas')
         .select('id', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .eq('status', 'vencida');
 
-      // 4) últimos pagamentos de mensalidades (dados)
+      // 8a) últimos pagamentos de mensalidades
       let ultMensalidadesQ = supabase
         .from('pagamentos')
         .select(`
@@ -175,7 +168,7 @@ export default function Dashboard() {
         .order('pago_em', { ascending: false })
         .limit(15);
 
-      // 5) últimos pagamentos diversos (dados)
+      // 8b) últimos pagamentos diversos
       let ultDiversosQ = supabase
         .from('pagamentos_diversos')
         .select('id, data, valor_centavos, metodo, tipo, descricao, matricula, membro_id')
@@ -184,7 +177,7 @@ export default function Dashboard() {
         .order('created_at', { ascending: false })
         .limit(15);
 
-      // 6) receitas do mês/hoje (somatórios)
+      // Receitas (somente não-viewer)
       const receitaMesMensalidadesQ = supabase
         .from('pagamentos')
         .select('valor_centavos')
@@ -211,18 +204,37 @@ export default function Dashboard() {
         .eq('data', hoje);
 
       // ====== RESTRIÇÕES PARA VIEWER ======
-      if (isViewer && membroIdViewer) {
+      if (isViewerRole && membroIdViewer) {
+        // faturas abertas do mês → apenas do membro
         faturasAbertasMesQ = faturasAbertasMesQ.eq('membro_id', membroIdViewer);
+
+        // atrasadas → apenas do membro
         atrasadasQ = atrasadasQ.eq('membro_id', membroIdViewer);
+
+        // últimos pagamentos (mensalidades) → filtradas pelo membro via join em faturas
         ultMensalidadesQ = ultMensalidadesQ.filter('faturas.membro_id', 'eq', membroIdViewer);
-        if (viewerMatricula) {
-          ultDiversosQ = ultDiversosQ.or(`membro_id.eq.${membroIdViewer},matricula.eq.${viewerMatricula}`);
+
+        // últimos diversos: filtra por membro_id OU, se não houver, pela matrícula resolvida
+        if (matriculaViewer) {
+          ultDiversosQ = ultDiversosQ.or(`membro_id.eq.${membroIdViewer},matricula.eq.${matriculaViewer}`);
         } else {
           ultDiversosQ = ultDiversosQ.eq('membro_id', membroIdViewer);
         }
       }
 
       // ====== DISPARA AS QUERIES ======
+      const promises: any[] = [
+        membrosQ,
+        faturasAbertasMesQ,
+        receitaMesMensalidadesQ,
+        receitaMesDiversosQ,
+        receitaHojeMensalidadesQ,
+        receitaHojeDiversosQ,
+        atrasadasQ,
+        ultMensalidadesQ,
+        ultDiversosQ,
+      ];
+
       const [
         membrosRes,
         abertasMesRes,
@@ -233,17 +245,7 @@ export default function Dashboard() {
         atrasadasRes,
         ultMensalidadesRes,
         ultDiversosRes,
-      ] = await Promise.all([
-        membrosQ,
-        faturasAbertasMesQ,
-        receitaMesMensalidadesQ,
-        receitaMesDiversosQ,
-        receitaHojeMensalidadesQ,
-        receitaHojeDiversosQ,
-        atrasadasQ,
-        ultMensalidadesQ,
-        ultDiversosQ,
-      ]);
+      ] = await Promise.all(promises);
 
       const sum = (arr?: any[]) => (arr ?? []).reduce((s, r) => s + toInt(r?.valor_centavos), 0);
 
@@ -293,11 +295,11 @@ export default function Dashboard() {
         });
       }
 
-      const ultimos = [...ultMensalidades, ...baseDiversos]
+      const unificados = [...ultMensalidades, ...baseDiversos]
         .sort((a, b) => (b.data || '').localeCompare(a.data || ''))
         .slice(0, 15);
 
-      const stats: DashboardStats = {
+      setStats({
         membrosAtivos: membrosRes.count ?? 0,
         faturasAbertasMes: abertasMesRes.count ?? 0,
         receitaMesMensalidades,
@@ -305,50 +307,40 @@ export default function Dashboard() {
         receitaHojeMensalidades,
         receitaHojeDiversos,
         atrasadas: atrasadasRes.count ?? 0,
-      };
+      });
 
-      return { stats, ultimos, viewerHint, viewerMatricula };
-    },
-    keepPreviousData: true,
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
-    onError: (e: any) => {
+      setUltimosPagamentos(unificados);
+    } catch (error: any) {
+      console.error(error);
       toast({
         title: 'Erro ao carregar dados',
-        description: e?.message ?? 'Tente recarregar a página',
+        description: error?.message ?? 'Tente recarregar a página',
         variant: 'destructive',
       });
-    },
-  });
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  // Skeletons de carregamento
-  if (orgLoading || dashQ.isLoading) {
+  const formatCurrency = (centavos: number) =>
+    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
+      (centavos ?? 0) / 100
+    );
+
+  if (loading) {
     return (
       <DashboardLayout>
-        <div className="space-y-6 p-4 md:p-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-28 md:h-32 bg-muted/20 rounded-lg animate-pulse" />
+              <div key={i} className="h-32 bg-muted/20 rounded-lg animate-pulse" />
             ))}
           </div>
-          <div className="h-56 md:h-64 bg-muted/20 rounded-lg animate-pulse" />
+          <div className="h-64 bg-muted/20 rounded-lg animate-pulse" />
         </div>
       </DashboardLayout>
     );
   }
-
-  const stats = dashQ.data?.stats ?? {
-    membrosAtivos: 0,
-    faturasAbertasMes: 0,
-    receitaMesMensalidades: 0,
-    receitaMesDiversos: 0,
-    receitaHojeMensalidades: 0,
-    receitaHojeDiversos: 0,
-    atrasadas: 0,
-  };
-  const ultimosPagamentos = dashQ.data?.ultimos ?? [];
-  const viewerHint = dashQ.data?.viewerHint ?? null;
-  const viewerMatricula = dashQ.data?.viewerMatricula ?? null;
 
   const receitaMesTotal = stats.receitaMesMensalidades + stats.receitaMesDiversos;
   const receitaHojeTotal = stats.receitaHojeMensalidades + stats.receitaHojeDiversos;
@@ -357,9 +349,9 @@ export default function Dashboard() {
   if (isViewer) {
     return (
       <DashboardLayout>
-        <div className="space-y-8 p-4 md:p-6">
+        <div className="space-y-8">
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold text-foreground">Dashboard</h1>
+            <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
             <p className="text-muted-foreground">
               Sua visão pessoal (apenas suas mensalidades e pagamentos)
             </p>
@@ -379,8 +371,8 @@ export default function Dashboard() {
             </Card>
           )}
 
-          {/* Cards principais */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
+          {/* Apenas 2 cards: Em aberto (mês) e Atrasadas */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Card className="bg-card/50 backdrop-blur-sm border-accent/20 shadow-warm">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Em Aberto (Mês)</CardTitle>
@@ -408,7 +400,7 @@ export default function Dashboard() {
             </Card>
           </div>
 
-          {/* Últimos Pagamentos — MOBILE: cards; DESKTOP: tabela */}
+          {/* Últimos Pagamentos (só do próprio membro) */}
           <Card className="bg-card/30 backdrop-blur-sm shadow-lg">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -417,81 +409,49 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {/* mobile list */}
-              <div className="md:hidden space-y-3">
-                {ultimosPagamentos.map((p) => (
-                  <div key={`${p.tipo}-${p.id}`} className="rounded-lg border p-3">
-                    <div className="flex items-center justify-between">
-                      <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
-                        {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
-                      </Badge>
-                      <span className="text-sm">{formatCurrency(p.valor_centavos)}</span>
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {new Date(p.data).toLocaleDateString('pt-BR')} • {p.metodo ?? '-'}
-                    </div>
-                    <div className="mt-1 text-sm">
-                      {p.tipo === 'mensalidade'
-                        ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
-                        : (p.descricao || 'Diverso')}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Matrícula: {p.matricula ?? viewerMatricula ?? '-'}
-                    </div>
-                  </div>
-                ))}
-                {ultimosPagamentos.length === 0 && (
-                  <div className="text-center py-6 text-muted-foreground">
-                    <Receipt className="h-10 w-10 mx-auto mb-2 opacity-20" />
-                    <p>Nenhum pagamento encontrado</p>
-                  </div>
-                )}
-              </div>
-
-              {/* desktop table */}
-              <div className="hidden md:block overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-border/50">
-                      <TableHead>Tipo</TableHead>
-                      <TableHead>Data</TableHead>
-                      <TableHead>Matrícula</TableHead>
-                      <TableHead>Descrição</TableHead>
-                      <TableHead>Método</TableHead>
-                      <TableHead className="text-right">Valor</TableHead>
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border/50">
+                    <TableHead>Tipo</TableHead>
+                    <TableHead>Data</TableHead>
+                    <TableHead>Matrícula</TableHead>
+                    <TableHead>Descrição</TableHead>
+                    <TableHead>Método</TableHead>
+                    <TableHead className="text-right">Valor</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {ultimosPagamentos.map((p) => (
+                    <TableRow key={`${p.tipo}-${p.id}`} className="border-border/50">
+                      <TableCell className="font-medium">
+                        <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
+                          {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {new Date(p.data).toLocaleDateString('pt-BR')}
+                      </TableCell>
+                      <TableCell>{p.matricula ?? viewerMatricula ?? '-'}</TableCell>
+                      <TableCell>
+                        {p.tipo === 'mensalidade'
+                          ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
+                          : (p.descricao || 'Diverso')}
+                      </TableCell>
+                      <TableCell>{p.metodo ?? '-'}</TableCell>
+                      <TableCell className="font-medium text-right">
+                        {formatCurrency(p.valor_centavos)}
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {ultimosPagamentos.map((p) => (
-                      <TableRow key={`${p.tipo}-${p.id}`} className="border-border/50">
-                        <TableCell className="font-medium">
-                          <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
-                            {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{new Date(p.data).toLocaleDateString('pt-BR')}</TableCell>
-                        <TableCell>{p.matricula ?? viewerMatricula ?? '-'}</TableCell>
-                        <TableCell>
-                          {p.tipo === 'mensalidade'
-                            ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
-                            : (p.descricao || 'Diverso')}
-                        </TableCell>
-                        <TableCell>{p.metodo ?? '-'}</TableCell>
-                        <TableCell className="font-medium text-right">
-                          {formatCurrency(p.valor_centavos)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                  ))}
+                </TableBody>
+              </Table>
 
-                {ultimosPagamentos.length === 0 && (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Receipt className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                    <p>Nenhum pagamento encontrado</p>
-                  </div>
-                )}
-              </div>
+              {ultimosPagamentos.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Receipt className="h-12 w-12 mx-auto mb-2 opacity-20" />
+                  <p>Nenhum pagamento encontrado</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -502,15 +462,15 @@ export default function Dashboard() {
   // ====== UI padrão (não-viewer) ======
   return (
     <DashboardLayout>
-      <div className="space-y-8 p-4 md:p-6">
+      <div className="space-y-8">
         {/* Header */}
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-foreground">Dashboard</h1>
+          <h1 className="text-3xl font-bold text-foreground">Dashboard</h1>
           <p className="text-muted-foreground">Visão geral do seu terreiro</p>
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <Card className="bg-card/50 backdrop-blur-sm border-primary/20 shadow-sacred">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Membros Ativos</CardTitle>
@@ -565,7 +525,7 @@ export default function Dashboard() {
         </div>
 
         {/* Receita de Hoje */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <Card className="bg-card/50 backdrop-blur-sm">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Receita de Hoje (Total)</CardTitle>
@@ -615,81 +575,50 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {/* mobile list */}
-            <div className="md:hidden space-y-3">
-              {ultimosPagamentos.map((p) => (
-                <div key={`${p.tipo}-${p.id}`} className="rounded-lg border p-3">
-                  <div className="flex items-center justify-between">
-                    <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
-                      {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
-                    </Badge>
-                    <span className="text-sm">{formatCurrency(p.valor_centavos)}</span>
-                  </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {new Date(p.data).toLocaleDateString('pt-BR')} • {p.metodo ?? '-'}
-                  </div>
-                  <div className="mt-1 text-sm">
-                    {p.tipo === 'mensalidade'
-                      ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
-                      : (p.descricao || 'Diverso') + (p.membro_nome ? ` • ${p.membro_nome}` : '')}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Matrícula: {p.matricula ?? '-'}
-                  </div>
-                </div>
-              ))}
-              {ultimosPagamentos.length === 0 && (
-                <div className="text-center py-6 text-muted-foreground">
-                  <Receipt className="h-10 w-10 mx-auto mb-2 opacity-20" />
-                  <p>Nenhum pagamento encontrado</p>
-                </div>
-              )}
-            </div>
-
-            {/* desktop table */}
-            <div className="hidden md:block overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border/50">
-                    <TableHead>Tipo</TableHead>
-                    <TableHead>Data</TableHead>
-                    <TableHead>Matrícula</TableHead>
-                    <TableHead>Membro/Descrição</TableHead>
-                    <TableHead>Método</TableHead>
-                    <TableHead className="text-right">Valor</TableHead>
+            <Table>
+              <TableHeader>
+                <TableRow className="border-border/50">
+                  <TableHead>Tipo</TableHead>
+                  <TableHead>Data</TableHead>
+                  <TableHead>Matrícula</TableHead>
+                  <TableHead>Membro/Descrição</TableHead>
+                  <TableHead>Método</TableHead>
+                  <TableHead className="text-right">Valor</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ultimosPagamentos.map((p) => (
+                  <TableRow key={`${p.tipo}-${p.id}`} className="border-border/50">
+                    <TableCell className="font-medium">
+                      <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
+                        {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {new Date(p.data).toLocaleDateString('pt-BR')}
+                    </TableCell>
+                    <TableCell>{p.matricula ?? '-'}</TableCell>
+                    <TableCell>
+                      {p.tipo === 'mensalidade'
+                        ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
+                        : (p.descricao || 'Diverso') + (p.membro_nome ? ` • ${p.membro_nome}` : '')
+                      }
+                    </TableCell>
+                    <TableCell>{p.metodo ?? '-'}</TableCell>
+                    <TableCell className="font-medium text-right">
+                      {formatCurrency(p.valor_centavos)}
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {ultimosPagamentos.map((p) => (
-                    <TableRow key={`${p.tipo}-${p.id}`} className="border-border/50">
-                      <TableCell className="font-medium">
-                        <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
-                          {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{new Date(p.data).toLocaleDateString('pt-BR')}</TableCell>
-                      <TableCell>{p.matricula ?? '-'}</TableCell>
-                      <TableCell>
-                        {p.tipo === 'mensalidade'
-                          ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
-                          : (p.descricao || 'Diverso') + (p.membro_nome ? ` • ${p.membro_nome}` : '')}
-                      </TableCell>
-                      <TableCell>{p.metodo ?? '-'}</TableCell>
-                      <TableCell className="font-medium text-right">
-                        {formatCurrency(p.valor_centavos)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                ))}
+              </TableBody>
+            </Table>
 
-              {ultimosPagamentos.length === 0 && (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Receipt className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                  <p>Nenhum pagamento encontrado</p>
-                </div>
-              )}
-            </div>
+            {ultimosPagamentos.length === 0 && (
+              <div className="text-center py-8 text-muted-foreground">
+                <Receipt className="h-12 w-12 mx-auto mb-2 opacity-20" />
+                <p>Nenhum pagamento encontrado</p>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

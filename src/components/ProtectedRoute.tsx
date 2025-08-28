@@ -1,21 +1,38 @@
-import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
-import { Skeleton } from '@/components/ui/skeleton';
+// src/components/ProtectedRoute.tsx
+"use client";
+
+import { useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
 }
 
+/**
+ * Guard simples de AUTENTICAÇÃO.
+ * - Se não autenticado, envia para /login?next=<rota-atual>
+ * - Enquanto carrega sessão, exibe skeleton.
+ * Regras de permissão específicas (ex.: superadmin, RBAC) ficam em guards dedicados.
+ */
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
-    if (!loading && !user) {
-      navigate('/login');
+    if (loading) return;
+
+    // Não autenticado → envia para /login mantendo o destino (pathname + search + hash)
+    if (!user) {
+      const next =
+        encodeURIComponent(
+          `${location.pathname}${location.search ?? ""}${location.hash ?? ""}`
+        ) || "/";
+      navigate(`/login?next=${next}`, { replace: true });
     }
-  }, [user, loading, navigate]);
+  }, [user, loading, navigate, location.pathname, location.search, location.hash]);
 
   if (loading) {
     return (
@@ -29,9 +46,7 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
     );
   }
 
-  if (!user) {
-    return null;
-  }
+  if (!user) return null;
 
   return <>{children}</>;
 }

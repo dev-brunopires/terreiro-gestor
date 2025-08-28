@@ -15,10 +15,11 @@ type Profile = {
 interface AuthContextType {
   user: User | null;
   session: Session | null;
-  loading: boolean;              // loading geral (auth + profile + permissions)
-  authLoading: boolean;          // loading só do estado de auth
+  loading: boolean;
+  authLoading: boolean;
   profile: Profile | null;
-  permissions: string[];
+  permissions: string[];   // role + plano
+  features: string[];      // features vindas do plano
   can: (permission: string) => boolean;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (email: string, password: string, nome: string) => Promise<{ error?: string }>;
@@ -27,25 +28,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Fallback local de permissões por papel (caso a view current_user_permissions não exista/retorne vazio)
+// fallback por role
 const rolePermissions: Record<Role, string[]> = {
-  owner: [
-    'membros:create','membros:edit','membros:view',
-    'faturas:gerar','faturas:pagar','planos:manage',
-    'billing:view','logs:view','assinaturas:link','settings:view'
-  ],
-  admin: [
-    'membros:create','membros:edit','membros:view',
-    'faturas:gerar','faturas:pagar','planos:manage',
-    'billing:view','logs:view','assinaturas:link','settings:view'
-  ],
-  financeiro: [
-    'membros:view','faturas:gerar','faturas:pagar',
-    'planos:manage','billing:view','logs:view','assinaturas:link','settings:view'
-  ],
-  operador: [
-    'membros:create','membros:edit','membros:view','assinaturas:link','settings:view'
-  ],
+  owner: ['membros:create','membros:edit','membros:view','faturas:gerar','faturas:pagar','planos:manage','billing:view','logs:view','assinaturas:link','settings:view'],
+  admin: ['membros:create','membros:edit','membros:view','faturas:gerar','faturas:pagar','planos:manage','billing:view','logs:view','assinaturas:link','settings:view'],
+  financeiro: ['membros:view','faturas:gerar','faturas:pagar','planos:manage','billing:view','logs:view','assinaturas:link','settings:view'],
+  operador: ['membros:create','membros:edit','membros:view','assinaturas:link','settings:view'],
   viewer: ['membros:view']
 };
 
@@ -56,11 +44,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true); // loading geral
+  const [features, setFeatures] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const { toast } = useToast();
 
-  // ---- helpers de carregamento de dados relacionados ao usuário ----
+  // ---- helpers ----
   const loadProfile = async (uid: string) => {
     const { data, error } = await supabase
       .from('profiles')
@@ -70,7 +59,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (error) throw error;
 
-    // Coerção de role para o tipo Role; default para 'viewer' se vier nulo/fora da lista
     const role = (data?.role as Role) ?? 'viewer';
     const prof: Profile | null = data
       ? { user_id: data.user_id, org_id: data.org_id, role, nome: data.nome }
@@ -80,40 +68,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return prof;
   };
 
-  const loadPermissions = async (prof: Profile | null) => {
-    // Tenta carregar da view escalável (Option B). Se falhar ou vier vazio, aplica fallback por role.
-    // View esperada: public.current_user_permissions (cols: user_id, org_id, permission)
+  const loadPermissionsAndFeatures = async (prof: Profile | null) => {
+    let perms: string[] = [];
+    let feats: string[] = [];
+
     try {
+      // carrega permissões explícitas
       if (prof?.user_id) {
         const { data, error } = await supabase
           .from('current_user_permissions')
           .select('permission');
-
         if (error) throw error;
-
-        if (data && data.length > 0) {
-          setPermissions(data.map((d: any) => d.permission as string));
-          return;
+        if (data?.length) {
+          perms = data.map((d: any) => d.permission as string);
         }
       }
     } catch {
-      // Silencia e aplica fallback
+      // ignora, cai no fallback
     }
 
-    // Fallback por role
-    const fallback = prof?.role ? rolePermissions[prof.role] ?? [] : [];
-    setPermissions(fallback);
+    // fallback por role
+    if (!perms.length && prof?.role) {
+      perms = rolePermissions[prof.role] ?? [];
+    }
+
+    // carrega features pelo plano da assinatura ativa
+    if (prof?.org_id) {
+      const { data: sub } = await supabase
+        .from('assinaturas')
+        .select('plano_id')
+        .eq('org_id', prof.org_id)
+        .eq('status', 'ativa')
+        .maybeSingle();
+
+      if (sub?.plano_id) {
+        const { data: featsData } = await supabase
+          .from('plan_features')
+          .select('feature')
+          .eq('plano_id', sub.plano_id);
+        feats = (featsData ?? []).map(f => f.feature);
+      }
+    }
+
+    setPermissions(perms);
+    setFeatures(feats);
   };
 
-  // ---- on mount: sincroniza sessão e listener ----
+  // ---- monta sessão + listener ----
   useEffect(() => {
     let mounted = true;
-
     const init = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!mounted) return;
-
         setSession(session ?? null);
         setUser(session?.user ?? null);
         setAuthLoading(false);
@@ -121,40 +128,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (mounted) setAuthLoading(false);
       }
     };
-
-    // Listener de mudanças de auth
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session ?? null);
       setUser(session?.user ?? null);
       setAuthLoading(false);
     });
-
     init();
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+    return () => { mounted = false; subscription.unsubscribe(); };
   }, []);
 
-  // ---- quando o user mudar, carrega profile + permissions ----
+  // ---- carrega profile + perms + features quando user mudar ----
   useEffect(() => {
     let active = true;
-
     const hydrate = async () => {
       setLoading(true);
       try {
         if (user?.id) {
           const prof = await loadProfile(user.id);
-          await loadPermissions(prof);
+          await loadPermissionsAndFeatures(prof);
         } else {
           setProfile(null);
           setPermissions([]);
+          setFeatures([]);
         }
       } catch (err: any) {
-        // Se der erro, zera perfil/perms para evitar estados incorretos
         setProfile(null);
         setPermissions([]);
+        setFeatures([]);
         toast({
           title: 'Falha ao carregar perfil',
           description: err?.message ?? 'Erro inesperado ao carregar dados do usuário.',
@@ -164,16 +164,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (active) setLoading(false);
       }
     };
-
     hydrate();
     return () => { active = false; };
   }, [user, toast]);
 
-  // ---- helper can() ----
+  // ---- can() leva em conta permissions + features ----
   const can = useMemo(() => {
-    const setPerms = new Set(permissions);
+    const setPerms = new Set([...permissions, ...features.map(f => `feature:${f}`)]);
     return (permission: string) => setPerms.has(permission);
-  }, [permissions]);
+  }, [permissions, features]);
 
   // ---- auth actions ----
   const signIn = async (email: string, password: string) => {
@@ -197,7 +196,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const redirectUrl =
         typeof window !== 'undefined' ? `${window.location.origin}/` : undefined;
-
       const { error } = await supabase.auth.signUp({
         email,
         password,
@@ -206,18 +204,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           data: { nome }
         }
       });
-
       if (error) {
         const msg = error.message || 'Erro no cadastro';
         toast({ title: 'Erro no cadastro', description: msg, variant: 'destructive' });
         return { error: msg };
       }
-
       toast({
         title: 'Cadastro realizado com sucesso!',
         description: 'Verifique seu email para confirmar a conta'
       });
-
       return {};
     } catch {
       const message = 'Erro inesperado no cadastro';
@@ -231,6 +226,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await supabase.auth.signOut();
       setProfile(null);
       setPermissions([]);
+      setFeatures([]);
       toast({ title: 'Logout realizado', description: 'Até logo!' });
     } catch {
       toast({
@@ -244,10 +240,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const value: AuthContextType = {
     user,
     session,
-    loading,        // pronto para render com perfil/permissões
-    authLoading,    // pronto só para decidir se há sessão
+    loading,
+    authLoading,
     profile,
     permissions,
+    features,
     can,
     signIn,
     signUp,
