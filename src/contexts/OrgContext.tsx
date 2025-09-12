@@ -13,18 +13,21 @@ import React, {
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 
+/* =========================
+ * Types
+ * =======================*/
 type OrgRow = {
   id: string;
   nome: string | null;
-  logo_url: string | null;          // pública (compat)
-  logo_bucket: string | null;       // ex.: "org-assets"
-  logo_path: string | null;         // ex.: "<org_id>/logo.png"
+  logo_url: string | null;    // pública (compat)
+  logo_bucket: string | null; // ex.: "org-assets"
+  logo_path: string | null;   // ex.: "<org_id>/logo.png"
 };
 
 type OrgContextValue = {
   orgId?: string | null;
   orgName?: string;
-  /** URL final para exibição (pública com cache-buster ou signed) */
+  /** URL final para exibição (pública ou assinada) */
   orgLogoUrl?: string;
   /** caminho no Storage (se privado) — útil para re-assinar */
   orgLogoPath?: string | null;
@@ -53,8 +56,9 @@ export function useOrg() {
   return useContext(OrgContext);
 }
 
-/* -------- utils -------- */
-
+/* =========================
+ * Utils
+ * =======================*/
 const SS_KEYS = {
   name: "ui_org_name",
   logoUrl: "ui_org_logo_url",
@@ -62,6 +66,16 @@ const SS_KEYS = {
   logoPath: "ui_org_logo_path",
   orgId: "ui_org_id",
 };
+
+const UUID_RX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Remove cascas como `<uuid>`, `"uuid"`, `'uuid'`, `{uuid}` e espaços; valida formato. */
+function sanitizeUuid(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const cleaned = v.trim().replace(/^[<{'"]+|[>'"}]+$/g, "");
+  return UUID_RX.test(cleaned) ? cleaned : null;
+}
 
 const isSigned = (u: string) => {
   try {
@@ -76,10 +90,10 @@ const isSigned = (u: string) => {
   }
 };
 
+/** Mantemos a função (compat), mas **não** aplicamos cache-buster em URLs assinadas. */
 function withCacheBust(url?: string | null) {
   if (!url) return undefined;
   try {
-    // não tocar em URLs assinadas
     if (isSigned(url)) return url;
     const u = new URL(url);
     u.searchParams.set("t", Date.now().toString());
@@ -89,11 +103,17 @@ function withCacheBust(url?: string | null) {
   }
 }
 
-/* -------- Provider -------- */
-
+/* =========================
+ * Provider
+ * =======================*/
 export function OrgProvider({ children }: { children: ReactNode }) {
   const { profile } = useAuth();
-  const orgId = profile?.org_id ?? null;
+
+  // sanitize org_id do profile (evita casos como "<uuid>")
+  const orgId = useMemo(
+    () => sanitizeUuid((profile as any)?.org_id ?? null),
+    [profile]
+  );
 
   const [loading, setLoading] = useState(true);
   const [orgName, setOrgName] = useState<string | undefined>(() =>
@@ -109,6 +129,13 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     sessionStorage.getItem(SS_KEYS.logoPath) || null
   );
 
+  /** Ref para evitar re-renders quando a URL não mudou de fato */
+  const orgLogoUrlRef = useRef<string | undefined>(orgLogoUrl);
+  useEffect(() => {
+    orgLogoUrlRef.current = orgLogoUrl;
+  }, [orgLogoUrl]);
+
+  /** Timer para renovar assinatura da logo privada (se houver) */
   const renewTimer = useRef<number | null>(null);
   const stopRenew = () => {
     if (renewTimer.current) {
@@ -126,75 +153,80 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       orgId?: string | null;
     }) => {
       if (payload.name !== undefined) {
-        if (payload.name === null) sessionStorage.removeItem(SS_KEYS.name);
-        else sessionStorage.setItem(SS_KEYS.name, payload.name);
+        payload.name === null
+          ? sessionStorage.removeItem(SS_KEYS.name)
+          : sessionStorage.setItem(SS_KEYS.name, payload.name);
       }
       if (payload.logoUrl !== undefined) {
-        if (payload.logoUrl === null) sessionStorage.removeItem(SS_KEYS.logoUrl);
-        else sessionStorage.setItem(SS_KEYS.logoUrl, payload.logoUrl);
+        payload.logoUrl === null
+          ? sessionStorage.removeItem(SS_KEYS.logoUrl)
+          : sessionStorage.setItem(SS_KEYS.logoUrl, payload.logoUrl);
       }
       if (payload.logoBucket !== undefined) {
-        if (!payload.logoBucket) sessionStorage.removeItem(SS_KEYS.logoBucket);
-        else sessionStorage.setItem(SS_KEYS.logoBucket, payload.logoBucket);
+        payload.logoBucket
+          ? sessionStorage.setItem(SS_KEYS.logoBucket, payload.logoBucket)
+          : sessionStorage.removeItem(SS_KEYS.logoBucket);
       }
       if (payload.logoPath !== undefined) {
-        if (!payload.logoPath) sessionStorage.removeItem(SS_KEYS.logoPath);
-        else sessionStorage.setItem(SS_KEYS.logoPath, payload.logoPath);
+        payload.logoPath
+          ? sessionStorage.setItem(SS_KEYS.logoPath, payload.logoPath)
+          : sessionStorage.removeItem(SS_KEYS.logoPath);
       }
       if (payload.orgId !== undefined) {
-        if (!payload.orgId) sessionStorage.removeItem(SS_KEYS.orgId);
-        else sessionStorage.setItem(SS_KEYS.orgId, payload.orgId);
+        payload.orgId
+          ? sessionStorage.setItem(SS_KEYS.orgId, payload.orgId)
+          : sessionStorage.removeItem(SS_KEYS.orgId);
       }
     },
     []
   );
 
-  const signLogoIfNeeded = useCallback(
-    async (bucket: string | null, path: string | null, fallbackUrl: string | null) => {
-      // bucket/path -> signed
-      if (bucket && path) {
-        const { data, error } = await supabase.storage
-          .from(bucket)
-          .createSignedUrl(path, 60 * 60); // 1h
-
-        if (!error && data?.signedUrl) {
-          const signed = data.signedUrl;
-          setOrgLogoUrl(signed);
-          saveToSession({ logoUrl: signed });
-          return;
-        }
-        // se assinatura falhar, ainda tenta fallback público
-      }
-
-      // somente URL pública
-      const final = withCacheBust(fallbackUrl) || undefined;
-      setOrgLogoUrl(final);
-      saveToSession({ logoUrl: final ?? null });
+  /** Só atualiza a URL se realmente mudou */
+  const setLogoUrlIfChanged = useCallback(
+    (next?: string) => {
+      if (next === orgLogoUrlRef.current) return;
+      setOrgLogoUrl(next);
+      saveToSession({ logoUrl: next ?? null });
     },
     [saveToSession]
   );
 
+  /** Gera URL assinada se bucket/path estiverem presentes; senão usa logo pública. */
+  const signLogoIfNeeded = useCallback(
+    async (bucket: string | null, path: string | null, fallbackUrl: string | null) => {
+      if (bucket && path) {
+        const { data, error } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(path, 60 * 60); // 1h
+        if (!error && data?.signedUrl) {
+          setLogoUrlIfChanged(data.signedUrl);
+          return;
+        }
+        // se falhar, cai no fallback público
+      }
+      setLogoUrlIfChanged(withCacheBust(fallbackUrl));
+    },
+    [setLogoUrlIfChanged]
+  );
+
+  /** Agenda renovação ~55min (antes do 1h) para URLs assinadas */
   const scheduleRenewIfNeeded = useCallback(() => {
     stopRenew();
     if (orgLogoBucket && orgLogoPath) {
-      // renova 55 minutos antes
       renewTimer.current = window.setInterval(async () => {
         const { data } = await supabase.storage
           .from(orgLogoBucket)
           .createSignedUrl(orgLogoPath, 60 * 60);
-        if (data?.signedUrl) {
-          setOrgLogoUrl(data.signedUrl);
-          saveToSession({ logoUrl: data.signedUrl });
-        }
+        if (data?.signedUrl) setLogoUrlIfChanged(data.signedUrl);
       }, 55 * 60 * 1000);
     }
-  }, [orgLogoBucket, orgLogoPath, saveToSession]);
+  }, [orgLogoBucket, orgLogoPath, setLogoUrlIfChanged]);
 
   const fetchOrg = useCallback(async () => {
     if (!orgId) {
-      // sem org → limpa
+      // sem org → limpa tudo
       setOrgName(undefined);
-      setOrgLogoUrl(undefined);
+      setLogoUrlIfChanged(undefined);
       setOrgLogoBucket(null);
       setOrgLogoPath(null);
       saveToSession({
@@ -209,27 +241,30 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     }
 
     setLoading(true);
-    const { data, error } = await supabase
-      .from("terreiros")
-      .select("id, nome, logo_url, logo_bucket, logo_path")
-      .eq("id", orgId)
-      .maybeSingle<OrgRow>();
+    try {
+      const { data, error } = await supabase
+        .from("terreiros")
+        .select("id, nome, logo_url, logo_bucket, logo_path")
+        .eq("id", orgId)
+        .maybeSingle<OrgRow>();
 
-    if (!error && data) {
-      setOrgName(data.nome ?? undefined);
-      setOrgLogoBucket(data.logo_bucket);
-      setOrgLogoPath(data.logo_path);
-      saveToSession({
-        name: data.nome ?? null,
-        logoBucket: data.logo_bucket,
-        logoPath: data.logo_path,
-        orgId,
-      });
+      if (!error && data) {
+        setOrgName(data.nome ?? undefined);
+        setOrgLogoBucket(data.logo_bucket);
+        setOrgLogoPath(data.logo_path);
+        saveToSession({
+          name: data.nome ?? null,
+          logoBucket: data.logo_bucket,
+          logoPath: data.logo_path,
+          orgId,
+        });
 
-      await signLogoIfNeeded(data.logo_bucket, data.logo_path, data.logo_url);
-      scheduleRenewIfNeeded();
+        await signLogoIfNeeded(data.logo_bucket, data.logo_path, data.logo_url);
+        scheduleRenewIfNeeded();
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [orgId, saveToSession, signLogoIfNeeded, scheduleRenewIfNeeded]);
 
   /** Re-assina somente a logo (sem refetch do row) */
@@ -238,31 +273,30 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase.storage
       .from(orgLogoBucket)
       .createSignedUrl(orgLogoPath, 60 * 60);
-    if (!error && data?.signedUrl) {
-      setOrgLogoUrl(data.signedUrl);
-      saveToSession({ logoUrl: data.signedUrl });
-    }
-  }, [orgLogoBucket, orgLogoPath, saveToSession]);
+    if (!error && data?.signedUrl) setLogoUrlIfChanged(data.signedUrl);
+  }, [orgLogoBucket, orgLogoPath, setLogoUrlIfChanged]);
 
   const refresh = useCallback(async () => {
     await fetchOrg();
   }, [fetchOrg]);
 
-  /* -------- effects -------- */
+  /* =========================
+   * Effects
+   * =======================*/
 
-  // quando o orgId muda (login/troca de org), hidrata do cache e busca do DB
+  // Quando o orgId muda (login/troca de org), hidrata do cache e busca do DB
   useEffect(() => {
-    // hidratação suave do cache
-    const cachedOrgId = sessionStorage.getItem(SS_KEYS.orgId);
-    if (cachedOrgId && cachedOrgId === orgId) {
+    // hidratação suave do cache, com sanitização
+    const cached = sanitizeUuid(sessionStorage.getItem(SS_KEYS.orgId));
+    if (cached && cached === orgId) {
       setOrgName(sessionStorage.getItem(SS_KEYS.name) || undefined);
-      setOrgLogoUrl(sessionStorage.getItem(SS_KEYS.logoUrl) || undefined);
+      setLogoUrlIfChanged(sessionStorage.getItem(SS_KEYS.logoUrl) || undefined);
       setOrgLogoBucket(sessionStorage.getItem(SS_KEYS.logoBucket) || null);
       setOrgLogoPath(sessionStorage.getItem(SS_KEYS.logoPath) || null);
       setLoading(false);
-      scheduleRenewIfNeeded(); // se já era privada, re-agenda a renovação
+      scheduleRenewIfNeeded();
     } else {
-      // limpa cache se mudou de organização
+      // mudou org → limpa cache visual
       saveToSession({
         name: null,
         logoUrl: null,
@@ -271,16 +305,14 @@ export function OrgProvider({ children }: { children: ReactNode }) {
         orgId: orgId ?? null,
       });
       setOrgName(undefined);
-      setOrgLogoUrl(undefined);
+      setLogoUrlIfChanged(undefined);
       setOrgLogoBucket(null);
       setOrgLogoPath(null);
     }
 
-    // busca do DB
     void fetchOrg();
-
     return () => stopRenew();
-  }, [orgId, fetchOrg, saveToSession, scheduleRenewIfNeeded]);
+  }, [orgId, fetchOrg, saveToSession, scheduleRenewIfNeeded, setLogoUrlIfChanged]);
 
   // realtime: atualiza quando a linha do terreiro mudar
   useEffect(() => {
@@ -294,9 +326,13 @@ export function OrgProvider({ children }: { children: ReactNode }) {
           const row = payload.new as OrgRow;
           setOrgName(row.nome ?? undefined);
           saveToSession({ name: row.nome ?? null });
+
           setOrgLogoBucket(row.logo_bucket);
           setOrgLogoPath(row.logo_path);
-          saveToSession({ logoBucket: row.logo_bucket, logoPath: row.logo_path });
+          saveToSession({
+            logoBucket: row.logo_bucket,
+            logoPath: row.logo_path,
+          });
 
           await signLogoIfNeeded(row.logo_bucket, row.logo_path, row.logo_url);
           scheduleRenewIfNeeded();

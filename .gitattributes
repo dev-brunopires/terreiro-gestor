@@ -1,0 +1,15 @@
+# Garanta que todos os arquivos de código fiquem em LF no repo
+*.js     text eol=lf
+*.jsx    text eol=lf
+*.ts     text eol=lf
+*.tsx    text eol=lf
+*.json   text eol=lf
+*.css    text eol=lf
+*.md     text eol=lf
+
+# Binários não devem ser alterados
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary

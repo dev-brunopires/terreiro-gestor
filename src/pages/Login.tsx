@@ -164,18 +164,24 @@ export default function Login() {
     <div className="min-h-screen bg-gradient-to-br from-background via-muted/30 to-accent/10 flex items-center justify-center p-4">
       <Card className="w-full max-w-md shadow-xl border-0 bg-card/80 backdrop-blur-sm">
         <CardHeader className="space-y-4 text-center">
-          <div className="mx-auto w-16 h-16 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-            <span className="text-2xl font-bold text-primary-foreground">🕯️</span>
-          </div>
+          {/* LOGO */}
+          <img
+            src="/icon-logo.png"
+            alt="Logo"
+            className="mx-auto w-16 h-16 object-contain rounded-full bg-white p-1 shadow"
+          />
+
+          {/* Título e subtítulo */}
           <div>
-            <CardTitle className="text-2xl font-bold bg-gradient-sacred bg-clip-text text-transparent">
-              Terreiro Gestor
+            <CardTitle className="text-primary">
+              Meu Axè
             </CardTitle>
             <CardDescription className="text-muted-foreground">
               Sistema de gestão para terreiros
             </CardDescription>
           </div>
         </CardHeader>
+
 
         <CardContent className="space-y-6">
           <form onSubmit={handleSubmit} className="space-y-4">

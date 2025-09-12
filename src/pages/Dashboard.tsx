@@ -1,5 +1,6 @@
 // src/pages/Dashboard.tsx
-import { useMemo } from 'react';
+// (A linha abaixo é opcional; remova se não usar)
+import { fetchDashboard } from "@/data/queries"; // ou "@/queries" se for o seu arquivo
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,13 +23,14 @@ type Role = 'owner' | 'admin' | 'viewer' | 'financeiro' | 'operador';
 type UltimoPagamento = {
   id: string;
   tipo: 'mensalidade' | 'diverso';
-  data: string; // ISO date or timestamp
+  data: string;
   valor_centavos: number;
   metodo?: string | null;
-  descricao?: string | null;     // para diversos
-  refer?: string | null;         // para mensalidades
+  descricao?: string | null;
+  refer?: string | null;
   membro_nome?: string | null;
   matricula?: string | null;
+  status?: 'pago' | 'reembolsado' | 'cancelado';
 };
 
 interface DashboardStats {
@@ -70,6 +72,21 @@ const formatCurrency = (centavos: number) =>
     (centavos ?? 0) / 100
   );
 
+/** ===== Helpers de STATUS ===== */
+const statusFromRow = (row: any, tipo: 'mensalidade' | 'diverso'): UltimoPagamento['status'] => {
+  if (row?.estornado === true) return 'reembolsado';
+  // Se for mensalidade e a fatura estiver cancelada, exibir "cancelado"
+  if (tipo === 'mensalidade' && (row?.faturas?.cancelada_em || row?.faturas?.status === 'cancelada')) {
+    return 'cancelado';
+  }
+  return 'pago';
+};
+
+const badgeVariantByStatus = (s?: UltimoPagamento['status']) =>
+  s === 'reembolsado' ? 'destructive'
+  : s === 'cancelado' ? 'secondary'
+  : 'default';
+
 export default function Dashboard() {
   const { toast } = useToast();
   const { orgId, profile, loading: orgLoading } = useOrg();
@@ -108,16 +125,18 @@ export default function Dashboard() {
     viewerHint: string | null;
     viewerMatricula: string | null;
   }>({
-    queryKey: ['dashboard', orgId, isViewer, membroIdViewer],
-    enabled: !!orgId && !orgLoading && (!!membroIdViewer || !isViewer),
+    queryKey: ['dashboard', orgId, orgLoading, !!profileQ.data, profileQ.data?.role, profileQ.data?.membro_id],
+    enabled: !!orgId && !orgLoading && (!!(profileQ.data?.membro_id) || ((profileQ.data?.role ?? 'operador') !== 'viewer')),
     queryFn: async () => {
       if (!orgId) throw new Error('Terreiro inválido');
+
+      const isViewer = (profileQ.data?.role ?? 'operador') === 'viewer';
+      const membroIdViewer = isViewer ? (profileQ.data?.membro_id ?? null) : null;
 
       const { startISO, endISO } = monthBounds();
       const refMes = currentRef();
       const hoje = todayISO();
 
-      // 0) Se for viewer, tentamos obter matrícula do vínculo (pode ser útil para "diversos")
       let viewerMatricula: string | null = null;
       let viewerHint: string | null = null;
 
@@ -135,29 +154,31 @@ export default function Dashboard() {
         }
       }
 
-      // 1) membros ativos (contagem)
+      // == Membros ativos (escopo por org_id OU terreiro_id)
       const membrosQ = supabase
         .from('membros')
         .select('id', { count: 'exact', head: true })
         .eq('ativo', true)
         .or(`org_id.eq.${orgId},terreiro_id.eq.${orgId}`);
 
-      // 2) faturas em aberto do mês (contagem)
+      // == Faturas abertas do mês (pendente/vencida e NÃO canceladas)
       let faturasAbertasMesQ = supabase
         .from('faturas')
         .select('id', { count: 'exact', head: true })
         .eq('org_id', orgId)
         .eq('refer', refMes)
-        .in('status', ['pendente', 'vencida']);
+        .in('status', ['pendente', 'vencida'])
+        .is('cancelada_em', null);
 
-      // 3) faturas atrasadas (contagem)
+      // == Faturas atrasadas (NÃO canceladas)
       let atrasadasQ = supabase
         .from('faturas')
         .select('id', { count: 'exact', head: true })
         .eq('org_id', orgId)
-        .eq('status', 'vencida');
+        .eq('status', 'vencida')
+        .is('cancelada_em', null);
 
-      // 4) últimos pagamentos de mensalidades (dados)
+      // == Últimas mensalidades (pagamentos de fatura) – sem estorno e do seu org
       let ultMensalidadesQ = supabase
         .from('pagamentos')
         .select(`
@@ -165,52 +186,76 @@ export default function Dashboard() {
           pago_em,
           valor_centavos,
           metodo,
+          estornado,
           faturas!inner(
             id,
             refer,
+            org_id,
             membro_id,
+            status,
+            cancelada_em,
             membros:membro_id(nome, matricula)
           )
         `)
+        .eq('faturas.org_id', orgId)
+        .or('estornado.is.false,estornado.is.null')
         .order('pago_em', { ascending: false })
         .limit(15);
 
-      // 5) últimos pagamentos diversos (dados)
+      // == Últimos diversos – sem estorno e do seu org
       let ultDiversosQ = supabase
         .from('pagamentos_diversos')
-        .select('id, data, valor_centavos, metodo, tipo, descricao, matricula, membro_id')
+        .select('id, data, valor_centavos, metodo, tipo, descricao, matricula, membro_id, estornado')
         .eq('terreiro_id', orgId)
+        .or('estornado.is.false,estornado.is.null')
         .order('data', { ascending: false })
         .order('created_at', { ascending: false })
         .limit(15);
 
-      // 6) receitas do mês/hoje (somatórios)
+      // == Receita do mês (mensalidades) – range + estorno + org
       const receitaMesMensalidadesQ = supabase
         .from('pagamentos')
-        .select('valor_centavos')
+        .select(`
+          valor_centavos,
+          estornado,
+          faturas!inner(org_id)
+        `)
         .gte('pago_em', startISO)
-        .lt('pago_em', endISO);
+        .lt('pago_em', endISO)
+        .eq('faturas.org_id', orgId)
+        .or('estornado.is.false,estornado.is.null');
 
+      // == Receita do mês (diversos) – range + estorno + org
       const receitaMesDiversosQ = supabase
         .from('pagamentos_diversos')
-        .select('valor_centavos')
+        .select('valor_centavos, estornado')
         .eq('terreiro_id', orgId)
         .gte('data', startISO.slice(0, 10))
-        .lt('data', endISO.slice(0, 10));
+        .lt('data', endISO.slice(0, 10))
+        .or('estornado.is.false,estornado.is.null');
 
+      // == Receita hoje (mensalidades) – dia + estorno + org
       const receitaHojeMensalidadesQ = supabase
         .from('pagamentos')
-        .select('valor_centavos')
+        .select(`
+          valor_centavos,
+          estornado,
+          faturas!inner(org_id)
+        `)
         .gte('pago_em', `${hoje}T00:00:00.000Z`)
-        .lt('pago_em', `${hoje}T23:59:59.999Z`);
+        .lt('pago_em', `${hoje}T23:59:59.999Z`)
+        .eq('faturas.org_id', orgId)
+        .or('estornado.is.false,estornado.is.null');
 
+      // == Receita hoje (diversos) – dia + estorno + org
       const receitaHojeDiversosQ = supabase
         .from('pagamentos_diversos')
-        .select('valor_centavos')
+        .select('valor_centavos, estornado')
         .eq('terreiro_id', orgId)
-        .eq('data', hoje);
+        .eq('data', hoje)
+        .or('estornado.is.false,estornado.is.null');
 
-      // ====== RESTRIÇÕES PARA VIEWER ======
+      // == Escopo VIEWER (membro)
       if (isViewer && membroIdViewer) {
         faturasAbertasMesQ = faturasAbertasMesQ.eq('membro_id', membroIdViewer);
         atrasadasQ = atrasadasQ.eq('membro_id', membroIdViewer);
@@ -222,7 +267,6 @@ export default function Dashboard() {
         }
       }
 
-      // ====== DISPARA AS QUERIES ======
       const [
         membrosRes,
         abertasMesRes,
@@ -245,39 +289,53 @@ export default function Dashboard() {
         ultDiversosQ,
       ]);
 
-      const sum = (arr?: any[]) => (arr ?? []).reduce((s, r) => s + toInt(r?.valor_centavos), 0);
+      const sum = (arr?: any[]) =>
+        (arr ?? [])
+          .filter(r => r?.estornado !== true) // defesa extra
+          .reduce((s, r) => s + toInt(r?.valor_centavos), 0);
 
       const receitaMesMensalidades = sum(mesMensalidadesRes.data);
       const receitaMesDiversos = sum(mesDiversosRes.data);
       const receitaHojeMensalidades = sum(hojeMensalidadesRes.data);
       const receitaHojeDiversos = sum(hojeDiversosRes.data);
 
-      // Monta “últimos pagamentos” unificando
-      const ultMensalidades: UltimoPagamento[] = (ultMensalidadesRes.data ?? []).map((p: any) => ({
-        id: p.id,
-        tipo: 'mensalidade',
-        data: p.pago_em,
-        valor_centavos: toInt(p.valor_centavos),
-        metodo: p.metodo ?? null,
-        descricao: `Ref ${p?.faturas?.refer ?? ''}`,
-        refer: p?.faturas?.refer ?? null,
-        membro_nome: p?.faturas?.membros?.nome ?? null,
-        matricula: p?.faturas?.membros?.matricula ?? null,
-      }));
+      const ultMensalidades: UltimoPagamento[] = (ultMensalidadesRes.data ?? [])
+        .filter((p: any) => p?.estornado !== true)
+        .map((p: any) => {
+          const st = statusFromRow(p, 'mensalidade');
+          return {
+            id: p.id,
+            tipo: 'mensalidade',
+            data: p.pago_em,
+            valor_centavos: toInt(p.valor_centavos),
+            metodo: p.metodo ?? null,
+            descricao: `Ref ${p?.faturas?.refer ?? ''}`,
+            refer: p?.faturas?.refer ?? null,
+            membro_nome: p?.faturas?.membros?.nome ?? null,
+            matricula: p?.faturas?.membros?.matricula ?? null,
+            status: st,
+          };
+        });
 
-      const baseDiversos: UltimoPagamento[] = (ultDiversosRes.data ?? []).map((d: any) => ({
-        id: d.id,
-        tipo: 'diverso',
-        data: d.data, // yyyy-mm-dd
-        valor_centavos: toInt(d.valor_centavos),
-        metodo: d.metodo ?? null,
-        descricao: d.descricao ?? d.tipo ?? 'Diverso',
-        refer: null,
-        membro_nome: null, // vamos preencher por matrícula (se existir)
-        matricula: d.matricula ?? null,
-      }));
+      const baseDiversos: UltimoPagamento[] = (ultDiversosRes.data ?? [])
+        .filter((d: any) => d?.estornado !== true)
+        .map((d: any) => {
+          const st = statusFromRow(d, 'diverso');
+          return {
+            id: d.id,
+            tipo: 'diverso',
+            data: d.data,
+            valor_centavos: toInt(d.valor_centavos),
+            metodo: d.metodo ?? null,
+            descricao: d.descricao ?? d.tipo ?? 'Diverso',
+            refer: null,
+            membro_nome: null,
+            matricula: d.matricula ?? null,
+            status: st,
+          };
+        });
 
-      // Resolve nomes por matrícula (para diversos)
+      // resolve nomes por matrícula (se houver)
       const mats = Array.from(new Set(baseDiversos.map(x => x.matricula).filter(Boolean))) as string[];
       if (mats.length) {
         const { data: membRows } = await supabase
@@ -309,20 +367,18 @@ export default function Dashboard() {
 
       return { stats, ultimos, viewerHint, viewerMatricula };
     },
-    keepPreviousData: true,
-    staleTime: 60_000,
+
+    // cache forte pra não refazer ao voltar de outra rota/aba:
+    staleTime: Infinity,
+    cacheTime: 1000 * 60 * 30, // 30 min
     refetchOnWindowFocus: false,
-    onError: (e: any) => {
-      toast({
-        title: 'Erro ao carregar dados',
-        description: e?.message ?? 'Tente recarregar a página',
-        variant: 'destructive',
-      });
-    },
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+    keepPreviousData: true,
   });
 
   // Skeletons de carregamento
-  if (orgLoading || dashQ.isLoading) {
+  if (orgLoading || (dashQ.isLoading && !dashQ.data)) {
     return (
       <DashboardLayout>
         <div className="space-y-6 p-4 md:p-6">
@@ -421,9 +477,12 @@ export default function Dashboard() {
               <div className="md:hidden space-y-3">
                 {ultimosPagamentos.map((p) => (
                   <div key={`${p.tipo}-${p.id}`} className="rounded-lg border p-3">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
                         {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
+                      </Badge>
+                      <Badge variant={badgeVariantByStatus(p.status)}>
+                        {p.status === 'reembolsado' ? 'Reembolsado' : p.status === 'cancelado' ? 'Cancelado' : 'Pago'}
                       </Badge>
                       <span className="text-sm">{formatCurrency(p.valor_centavos)}</span>
                     </div>
@@ -433,7 +492,7 @@ export default function Dashboard() {
                     <div className="mt-1 text-sm">
                       {p.tipo === 'mensalidade'
                         ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
-                        : (p.descricao || 'Diverso')}
+                        : (p.descricao || 'Diverso') + (p.membro_nome ? ` • ${p.membro_nome}` : '')}
                     </div>
                     <div className="text-xs text-muted-foreground">
                       Matrícula: {p.matricula ?? viewerMatricula ?? '-'}
@@ -456,8 +515,9 @@ export default function Dashboard() {
                       <TableHead>Tipo</TableHead>
                       <TableHead>Data</TableHead>
                       <TableHead>Matrícula</TableHead>
-                      <TableHead>Descrição</TableHead>
+                      <TableHead>Membro/Descrição</TableHead>
                       <TableHead>Método</TableHead>
+                      <TableHead>Status</TableHead>
                       <TableHead className="text-right">Valor</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -474,9 +534,14 @@ export default function Dashboard() {
                         <TableCell>
                           {p.tipo === 'mensalidade'
                             ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
-                            : (p.descricao || 'Diverso')}
+                            : (p.descricao || 'Diverso') + (p.membro_nome ? ` • ${p.membro_nome}` : '')}
                         </TableCell>
                         <TableCell>{p.metodo ?? '-'}</TableCell>
+                        <TableCell>
+                          <Badge variant={badgeVariantByStatus(p.status)}>
+                            {p.status === 'reembolsado' ? 'Reembolsado' : p.status === 'cancelado' ? 'Cancelado' : 'Pago'}
+                          </Badge>
+                        </TableCell>
                         <TableCell className="font-medium text-right">
                           {formatCurrency(p.valor_centavos)}
                         </TableCell>
@@ -619,9 +684,12 @@ export default function Dashboard() {
             <div className="md:hidden space-y-3">
               {ultimosPagamentos.map((p) => (
                 <div key={`${p.tipo}-${p.id}`} className="rounded-lg border p-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
                       {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
+                    </Badge>
+                    <Badge variant={badgeVariantByStatus(p.status)}>
+                      {p.status === 'reembolsado' ? 'Reembolsado' : p.status === 'cancelado' ? 'Cancelado' : 'Pago'}
                     </Badge>
                     <span className="text-sm">{formatCurrency(p.valor_centavos)}</span>
                   </div>
@@ -656,6 +724,7 @@ export default function Dashboard() {
                     <TableHead>Matrícula</TableHead>
                     <TableHead>Membro/Descrição</TableHead>
                     <TableHead>Método</TableHead>
+                    <TableHead>Status</TableHead>
                     <TableHead className="text-right">Valor</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -675,6 +744,11 @@ export default function Dashboard() {
                           : (p.descricao || 'Diverso') + (p.membro_nome ? ` • ${p.membro_nome}` : '')}
                       </TableCell>
                       <TableCell>{p.metodo ?? '-'}</TableCell>
+                      <TableCell>
+                        <Badge variant={badgeVariantByStatus(p.status)}>
+                          {p.status === 'reembolsado' ? 'Reembolsado' : p.status === 'cancelado' ? 'Cancelado' : 'Pago'}
+                        </Badge>
+                      </TableCell>
                       <TableCell className="font-medium text-right">
                         {formatCurrency(p.valor_centavos)}
                       </TableCell>

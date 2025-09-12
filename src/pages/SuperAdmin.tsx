@@ -78,7 +78,6 @@ const ALL_FEATURES: Array<{ code: string; label: string }> = [
 ];
 
 /** Edge Functions (com variações para compat e fallback) */
-/** Edge Functions (com variações para compat e fallback) */
 const EDGE = {
   TERREIRO_UPSERT: [
     "superadmin-upsert-terreiro",
@@ -113,13 +112,40 @@ const EDGE = {
 } as const;
 
 
+// Copia texto com fallback quando navigator.clipboard não existir / não for seguro.
+async function safeCopyToClipboard(text: string) {
+  try {
+    if (typeof navigator !== "undefined" && navigator?.clipboard?.writeText && window?.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    // Fallback: textarea + execCommand
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    // iOS compat
+    try { ta.setSelectionRange(0, ta.value.length); } catch {}
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (!ok) throw new Error("execCommand copy failed");
+    return true;
+  } catch (e) {
+    console.error("[safeCopyToClipboard]", e);
+    return false;
+  }
+}
+
+
 /** Invoca Edge e tenta extrair mensagem detalhada do response */
 async function callEdge(fnName: string, payload: any) {
   const { data, error } = await supabase.functions.invoke(fnName, { body: payload });
-
   if (!error) return data;
 
-  // Tenta extrair o máximo do response original
   let status = (error as any)?.status ?? (error as any)?.context?.response?.status ?? 0;
   let statusText = (error as any)?.context?.response?.statusText ?? "";
   let rawBody: any = null;
@@ -129,30 +155,16 @@ async function callEdge(fnName: string, payload: any) {
   try {
     const resp: Response | undefined = (error as any)?.context?.response;
     if (resp) {
-      // clona para poder ler mais de uma vez
       const r1 = resp.clone();
       const r2 = resp.clone();
-      // headers
       r1.headers.forEach((v, k) => (headers[k] = v));
-      // tenta json -> fallback text
-      try {
-        rawBody = await r2.json();
-      } catch {
-        try {
-          textBody = await r2.text();
-        } catch {
-          /* no-op */
-        }
-      }
-      // status/linha de status
+      try { rawBody = await r2.json(); }
+      catch { try { textBody = await r2.text(); } catch { /* no-op */ } }
       status = resp.status;
       statusText = resp.statusText;
     }
-  } catch {
-    /* no-op */
-  }
+  } catch { /* no-op */ }
 
-  // Gera uma mensagem amigável + dump de diagnóstico no console
   const detail =
     (data as any)?.error ||
     rawBody?.error ||
@@ -179,7 +191,6 @@ async function callEdge(fnName: string, payload: any) {
   throw err;
 }
 
-
 /** Tenta uma sequência de nomes de Edge com fallback p/ DB quando 404/405/0 */
 async function tryFunctions(names: string[], payload: any) {
   let lastErr: any = null;
@@ -189,10 +200,8 @@ async function tryFunctions(names: string[], payload: any) {
     } catch (e: any) {
       lastErr = e;
       const s = e?.status;
-      // segue quando a edge não existe OU quando foi erro de transporte (status 0/null)
-      if (s === 404 || s === 405 || s === 0 || s == null) continue;
-      // erros “reais” da edge propagam
-      throw e;
+      if (s === 404 || s === 405 || s === 0 || s == null) continue; // edge ausente/transporte
+      throw e; // erro “real”
     }
   }
   throw lastErr;
@@ -214,6 +223,10 @@ export default function SuperadminPage() {
   const [dlgOpen, setDlgOpen] = useState(false);
   const [editing, setEditing] = useState<Terreiro | null>(null);
   const [nome, setNome] = useState("");
+
+  // NOVOS: criar com owner
+  const [novoOwnerEmail, setNovoOwnerEmail] = useState("");
+  const [novoOwnerNome, setNovoOwnerNome] = useState("");
 
   // link owner
   const [linkDlgOpen, setLinkDlgOpen] = useState(false);
@@ -344,28 +357,118 @@ export default function SuperadminPage() {
   }
 
   /** CRUD: terreiros (nome) com fallback */
-  const openCreate = () => { setEditing(null); setNome(""); setDlgOpen(true); };
+  const openCreate = () => {
+    setEditing(null);
+    setNome("");
+    setNovoOwnerEmail("");
+    setNovoOwnerNome("");
+    setDlgOpen(true);
+  };
   const openEdit = (t: Terreiro) => { setEditing(t); setNome(t.nome); setDlgOpen(true); };
 
   const submitTerreiro = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       if (!nome.trim()) throw new Error("Informe o nome do terreiro");
+
+      let createdOrgId: string | null = editing?.id ?? null;
+
+      // 1) Upsert do terreiro (inclui email quando criando)
       try {
-        await tryFunctions(EDGE.TERREIRO_UPSERT, { id: editing?.id ?? null, nome: nome.trim() });
+        await tryFunctions(EDGE.TERREIRO_UPSERT, {
+          id: editing?.id ?? null,
+          nome: nome.trim(),
+          email: editing ? undefined : (novoOwnerEmail?.trim() || null),
+        });
       } catch (err: any) {
         if (err?.status === 404 || err?.status === 405 || err?.status === 0 || err?.status == null) {
           if (editing?.id) {
             const { error } = await supabase.from("terreiros").update({ nome: nome.trim() }).eq("id", editing.id);
             if (error) throw error;
           } else {
-            const { error } = await supabase.from("terreiros").insert({ nome: nome.trim() });
+            const { data, error } = await supabase
+              .from("terreiros")
+              .insert({ nome: nome.trim(), email: novoOwnerEmail?.trim() || null })
+              .select("id")
+              .single();
             if (error) throw error;
+            createdOrgId = data?.id ?? null;
           }
         } else throw err;
       }
+
+      // Descobre orgId caso seja criação via edge
+      if (!createdOrgId) {
+        const { data: trow, error: terrErr } = await supabase
+          .from("terreiros")
+          .select("id")
+          .eq("nome", nome.trim())
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (terrErr) throw terrErr;
+        createdOrgId = trow?.id ?? editing?.id ?? null;
+      }
+
+      // 2) Se foi criação e tem e-mail de owner: cria usuário, seta como owner,
+      // grava no contrato e cria membro matricula '0'
+      const email = (novoOwnerEmail || "").trim().toLowerCase();
+      if (!editing && createdOrgId && email) {
+        // 2.1 cria/associa owner (edge preferida)
+        try {
+          await tryFunctions(EDGE.CREATE_USER, {
+            email,
+            password: DEFAULT_OWNER_PASSWORD,
+            org_id: createdOrgId,
+            role: "owner",
+            nome: novoOwnerNome.trim() || null,
+            membro_id: null,
+          });
+        } catch (err: any) {
+          if (err?.status === 409 && /user_already_in_other_org/i.test(err?.message || err?.body?.error || "")) {
+            throw new Error("Este e-mail já está vinculado a outra organização.");
+          }
+          throw err;
+        }
+
+        // 2.2 garante email no terreiro
+        try { await supabase.from("terreiros").update({ email }).eq("id", createdOrgId); } catch {}
+
+        // 2.3 owner_email no contrato (upsert)
+        try { await supabase.from("saas_org_contracts").upsert({ org_id: createdOrgId, owner_email: email }, { onConflict: "org_id" }); } catch {}
+
+        // 2.4 cria membro matricula '0' se não existir
+        const { data: m0, error: m0Err } = await supabase
+          .from("membros")
+          .select("id")
+          .eq("org_id", createdOrgId)
+          .eq("terreiro_id", createdOrgId)
+          .eq("matricula", "0")
+          .maybeSingle();
+        if (m0Err) throw m0Err;
+
+        if (!m0?.id) {
+          const nomeMembro = novoOwnerNome?.trim() || "Responsável";
+          const { error: insErr } = await supabase.from("membros").insert({
+            nome: nomeMembro,
+            email: email,
+            org_id: createdOrgId,
+            terreiro_id: createdOrgId,
+            ativo: true,
+            matricula: "0",
+            data_admissao_terreiro: new Date().toISOString().slice(0, 10),
+          });
+          if (insErr) throw insErr;
+        }
+      }
+
       toast({ title: editing ? "Terreiro atualizado" : "Terreiro criado", description: nome });
-      setDlgOpen(false); setNome(""); setEditing(null); await loadTerreiros();
+      setDlgOpen(false);
+      setNome("");
+      setNovoOwnerEmail("");
+      setNovoOwnerNome("");
+      setEditing(null);
+      await loadTerreiros();
     } catch (e: any) {
       toast({ title: "Erro ao salvar", description: e?.message, variant: "destructive" });
     }
@@ -404,6 +507,7 @@ export default function SuperadminPage() {
     try {
       setLinkSubmitting(true);
 
+      // 1) cria/associa usuário owner
       try {
         await tryFunctions(EDGE.CREATE_USER, {
           email,
@@ -414,46 +518,50 @@ export default function SuperadminPage() {
           membro_id: null,
         });
       } catch (err: any) {
-        if (
-          err?.status === 409 &&
-          /user_already_in_other_org/i.test(
-            err?.message || err?.body?.error || ""
-          )
-        ) {
-          throw new Error(
-            "Este e-mail já está vinculado a outra organização. Um usuário só pode pertencer a uma org."
-          );
+        if (err?.status === 409 && /user_already_in_other_org/i.test(err?.message || err?.body?.error || "")) {
+          throw new Error("Este e-mail já está vinculado a outra organização.");
         }
         throw err;
       }
 
-      // opcional: gravar owner_email no contrato, se existir
-      try {
-        await supabase
-          .from("saas_org_contracts")
-          .update({ owner_email: email })
-          .eq("org_id", linkOrg.id);
-      } catch {}
+      // 2) grava email no terreiro
+      try { await supabase.from("terreiros").update({ email }).eq("id", linkOrg.id); } catch {}
 
-      toast({
-        title: "Owner vinculado",
-        description: `Usuário ${email} agora é owner de "${linkOrg.nome}".`,
-      });
+      // 3) owner_email no contrato (upsert)
+      try { await supabase.from("saas_org_contracts").upsert({ org_id: linkOrg.id, owner_email: email }, { onConflict: "org_id" }); } catch {}
+
+      // 4) cria membro matricula '0' se não existir
+      const { data: m0, error: m0Err } = await supabase
+        .from("membros")
+        .select("id")
+        .eq("org_id", linkOrg.id)
+        .eq("terreiro_id", linkOrg.id)
+        .eq("matricula", "0")
+        .maybeSingle();
+      if (m0Err) throw m0Err;
+
+      if (!m0?.id) {
+        const nomeMembro = ownerNome?.trim() || "Responsável";
+        const { error: insErr } = await supabase.from("membros").insert({
+          nome: nomeMembro,
+          email: email,
+          org_id: linkOrg.id,
+          terreiro_id: linkOrg.id,
+          ativo: true,
+          matricula: "0",
+          data_admissao_terreiro: new Date().toISOString().slice(0, 10),
+        });
+        if (insErr) throw insErr;
+      }
+
+      toast({ title: "Owner vinculado", description: `Usuário ${email} agora é owner de "${linkOrg.nome}".` });
       setLinkDlgOpen(false);
       setOwnerEmail("");
       setOwnerNome("");
       await loadTerreiros();
     } catch (e: any) {
-      const msg =
-        e?.message ||
-        e?.body?.error ||
-        e?.raw?.message ||
-        "Falha ao criar/associar owner";
-      toast({
-        title: "Erro ao vincular owner",
-        description: msg,
-        variant: "destructive",
-      });
+      const msg = e?.message || e?.body?.error || e?.raw?.message || "Falha ao criar/associar owner";
+      toast({ title: "Erro ao vincular owner", description: msg, variant: "destructive" });
     } finally {
       setLinkSubmitting(false);
     }
@@ -631,31 +739,39 @@ export default function SuperadminPage() {
   };
 
   /** utils: copiar/compartilhar access_code */
+
   const onCopyAccessCode = async (code?: string | null) => {
     if (!code) return;
-    try {
-      await navigator.clipboard.writeText(code);
+    const ok = await safeCopyToClipboard(code);
+    if (ok) {
       toast({ title: "Copiado", description: `Código de acesso: ${code}` });
-    } catch (e: any) {
-      toast({ title: "Falha ao copiar", description: e?.message, variant: "destructive" });
+    } else {
+      toast({ title: "Falha ao copiar", description: "Seu navegador bloqueou o acesso à área de transferência. Copie manualmente.", variant: "destructive" });
     }
   };
+
   const onShareAccessCode = async (t: Terreiro) => {
     const code = t.access_code ?? "";
     if (!code) return;
     const shareText = `Código de acesso ao Terreiro "${t.nome}": ${code}`;
-    const shareUrl = window.location.origin;
+    const shareUrl = typeof window !== "undefined" ? window.location.origin : "";
+
     try {
-      if ((navigator as any).share) {
+      if ((navigator as any)?.share) {
         await (navigator as any).share({ title: "Código de acesso", text: shareText, url: shareUrl });
       } else {
-        await navigator.clipboard.writeText(`${shareText}\n${shareUrl}`);
-        toast({ title: "Copiado", description: "Conteúdo copiado para compartilhar." });
+        const ok = await safeCopyToClipboard(`${shareText}\n${shareUrl}`);
+        if (ok) {
+          toast({ title: "Copiado", description: "Conteúdo copiado para compartilhar." });
+        } else {
+          toast({ title: "Falha ao copiar", description: "Seu navegador bloqueou o acesso à área de transferência.", variant: "destructive" });
+        }
       }
     } catch (e: any) {
-      toast({ title: "Falha ao compartilhar", description: e?.message, variant: "destructive" });
+      toast({ title: "Falha ao compartilhar", description: e?.message ?? "Erro desconhecido", variant: "destructive" });
     }
   };
+
 
   if (!allowed) {
     return (
@@ -682,7 +798,7 @@ export default function SuperadminPage() {
             <p className="text-muted-foreground">Gerencie terreiros, planos do SaaS e contratos.</p>
           </div>
           <div className="flex gap-2">
-            <Button onClick={() => openCreate()} className="bg-primary text-primary-foreground">
+            <Button onClick={openCreate} className="bg-primary text-primary-foreground">
               <Plus className="h-4 w-4 mr-2" />Novo Terreiro
             </Button>
             <Button variant="outline" onClick={() => setPlanDlgOpen(true)}>
@@ -724,11 +840,14 @@ export default function SuperadminPage() {
                 ) : (
                   filtered.map(t => {
                     const c = contracts[t.id] ?? null;
+                    const emailToShow = t.email || c?.owner_email || "";
                     return (
                       <TableRow key={t.id}>
                         <TableCell>
                           <div className="font-medium">{t.nome}</div>
-                          <div className="text-xs text-muted-foreground">{t.email || "sem e-mail"}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {emailToShow || "sem e-mail"}
+                          </div>
                         </TableCell>
                         <TableCell>
                           {t.access_code ? (
@@ -885,6 +1004,32 @@ export default function SuperadminPage() {
               <Label>Nome</Label>
               <Input value={nome} onChange={e => setNome(e.target.value)} placeholder="Ex.: Terreiro de Iemanjá" />
             </div>
+
+            {!editing && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label>E-mail do owner (opcional)</Label>
+                  <Input
+                    type="email"
+                    value={novoOwnerEmail}
+                    onChange={e => setNovoOwnerEmail(e.target.value)}
+                    placeholder="owner@exemplo.com"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Se informado, cria o usuário owner, define a matrícula <b>0</b> como membro e grava o e-mail no terreiro.
+                  </p>
+                </div>
+                <div>
+                  <Label>Nome do owner (opcional)</Label>
+                  <Input
+                    value={novoOwnerNome}
+                    onChange={e => setNovoOwnerNome(e.target.value)}
+                    placeholder="Nome do responsável"
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setDlgOpen(false)}>Cancelar</Button>
               <Button type="submit">Salvar</Button>

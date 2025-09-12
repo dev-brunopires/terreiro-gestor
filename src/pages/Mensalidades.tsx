@@ -12,7 +12,26 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
-import { Search, Wallet, CheckSquare, FileText } from 'lucide-react';
+import {
+  Search,
+  Wallet,
+  CheckSquare,
+  FileText,
+  RotateCcw
+} from 'lucide-react';
+import FeatureGate from "@/components/FeatureGate";
+import UpgradeCard from "@/components/UpgradeCard";
+// AlertDialog (padrão shadcn) para confirmação de reembolso
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@/components/ui/alert-dialog';
 
 type UIStatus = 'aberta' | 'atrasada' | 'paga';
 
@@ -35,6 +54,7 @@ interface MensalidadeRow {
 type PayPreset = 'dinheiro' | 'pix' | 'cartao' | 'transferencia' | 'outro';
 
 export default function Mensalidades() {
+  
   const { toast } = useToast();
   const { profile, user } = useAuth();
 
@@ -45,7 +65,7 @@ export default function Mensalidades() {
   const [rows, setRows] = useState<MensalidadeRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // NOVO: mensagem quando viewer não tem vínculo com membro
+  // mensagem quando viewer não tem vínculo com membro
   const [noLinkMsg, setNoLinkMsg] = useState<string | null>(null);
 
   // dados da org para o cupom
@@ -81,6 +101,11 @@ export default function Mensalidades() {
   // pós-pagamento → cupom fiscal
   const [askReceiptOpen, setAskReceiptOpen] = useState(false);
   const [lastPaidSnapshot, setLastPaidSnapshot] = useState<MensalidadeRow[]>([]);
+
+  // refund
+  const [refundingId, setRefundingId] = useState<string | null>(null);
+  const [refundDialogOpen, setRefundDialogOpen] = useState(false);
+  const [refundTarget, setRefundTarget] = useState<MensalidadeRow | null>(null);
 
   // força PIX quando viewer
   useEffect(() => {
@@ -330,7 +355,7 @@ export default function Mensalidades() {
     });
   }, [rows, statusFilter]);
 
-  // seleção — recalcula APENAS quando selectAll muda (evita “travar/selecionar” ao digitar)
+  // seleção — recalcula APENAS quando selectAll muda
   useEffect(() => {
     if (selectAll) {
       setSelectedIds(new Set(filtered.filter((r) => r.ui_status !== 'paga').map((r) => r.id)));
@@ -338,7 +363,7 @@ export default function Mensalidades() {
       setSelectedIds(new Set());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectAll]); // <-- não depende mais de filtered.length
+  }, [selectAll]);
 
   const toggleRow = (id: string, checked: boolean, disabled = false) => {
     if (disabled) return;
@@ -360,7 +385,7 @@ export default function Mensalidades() {
     return soma;
   }, [rows, selectedIds]);
 
-  // abrir diálogo
+  // abrir diálogo de pagamento
   const confirmarPagamentoSelecionadas = () => {
     if (selectedIds.size === 0) {
       toast({ title: 'Nada selecionado', description: 'Selecione ao menos uma mensalidade.' });
@@ -544,80 +569,170 @@ export default function Mensalidades() {
     }
   };
 
+  // ===== Reembolso (UI + ação) =====
+  const pedirReembolso = (row: MensalidadeRow) => {
+    if (isViewer) return; // segurança
+    setRefundTarget(row);
+    setRefundDialogOpen(true);
+  };
+
+  const confirmarReembolso = async () => {
+    if (!refundTarget) return;
+    const row = refundTarget;
+
+    try {
+      setRefundingId(row.id);
+
+      // 1) Apaga pagamentos da fatura
+      const { error: delErr } = await supabase
+        .from('pagamentos')
+        .delete()
+        .eq('fatura_id', row.id);
+      if (delErr) throw delErr;
+
+      // 2) Reabre a fatura (pendente/vencida de acordo com o vencimento)
+      const vencida =
+        new Date(row.dt_vencimento).getTime() < new Date().getTime() ? 'vencida' : 'pendente';
+
+      const { error: updErr } = await supabase
+        .from('faturas')
+        .update({
+          status: vencida,
+          dt_pagamento: null,
+          forma_pagamento: null,
+          vl_pago_centavos: null
+        })
+        .eq('id', row.id);
+      if (updErr) throw updErr;
+
+      toast({
+        title: 'Reembolso concluído',
+        description: `Fatura ${row.refer} reaberta como ${vencida}.`,
+      });
+
+      setRefundDialogOpen(false);
+      setRefundTarget(null);
+      if (membroId) await carregarPorMembroId(membroId);
+    } catch (e: any) {
+      console.error(e);
+      toast({
+        title: 'Erro ao reembolsar',
+        description: e?.message ?? 'Tente novamente',
+        variant: 'destructive',
+      });
+    } finally {
+      setRefundingId(null);
+    }
+  };
+
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
-              <Wallet className="h-8 w-8 text-primary" />
-              Mensalidades
-            </h1>
-            {isViewer ? (
-              <p className="text-muted-foreground">
-                Aqui você vê e quita <strong>apenas as suas</strong> mensalidades (pagamento via <strong>PIX</strong>).
-              </p>
-            ) : (
-              <p className="text-muted-foreground">
-                Informe <strong>nome</strong> ou <strong>matrícula</strong> para visualizar as mensalidades
-              </p>
-            )}
+      <FeatureGate code="membros" fallback={<UpgradeCard needed="Membros" />}>
+        {/* 6) Garantir que o conteúdo da página fique por trás da navbar fixa */}
+        {/* Se sua navbar do DashboardLayout usa z-50, este wrapper com z-0 resolve a sobreposição durante o scroll */}
+        <div className="space-y-6 relative z-0">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
+                <Wallet className="h-8 w-8 text-primary" />
+                Mensalidades
+              </h1>
+              {isViewer ? (
+                <p className="text-muted-foreground">
+                  Aqui você vê e quita <strong>apenas as suas</strong> mensalidades (pagamento via <strong>PIX</strong>).
+                </p>
+              ) : (
+                <p className="text-muted-foreground">
+                  Informe <strong>nome</strong> ou <strong>matrícula</strong> para visualizar as mensalidades
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => (membroId ? carregarPorMembroId(membroId) : buscar())}
+                className="hover:opacity-90"
+                title="Recarregar lista"
+              >
+                Recarregar
+              </Button>
+              <Button
+                onClick={confirmarPagamentoSelecionadas}
+                disabled={selectedIds.size === 0}
+                className="bg-gradient-sacred hover:opacity-90"
+                title="Pagar mensalidades selecionadas"
+              >
+                <CheckSquare className="h-4 w-4 mr-2" />
+                Pagar selecionadas
+              </Button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              onClick={() => (membroId ? carregarPorMembroId(membroId) : buscar())}
-              className="hover:opacity-90"
-              title="Recarregar lista"
-            >
-              Recarregar
-            </Button>
-            <Button
-              onClick={confirmarPagamentoSelecionadas}
-              disabled={selectedIds.size === 0}
-              className="bg-gradient-sacred hover:opacity-90"
-              title="Pagar mensalidades selecionadas"
-            >
-              <CheckSquare className="h-4 w-4 mr-2" />
-              Pagar selecionadas
-            </Button>
-          </div>
-        </div>
-
-        {/* Pesquisa (escondida para viewer) */}
-        {!isViewer && (
-          <Card className="bg-card/50 backdrop-blur-sm">
-            <CardContent className="pt-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="md:col-span-2">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
-                    {/* Form simples para evitar submit global e parar propagação de teclas */}
-                    <form
-                      onSubmit={(e) => { e.preventDefault(); buscar(); }}
+          {/* Pesquisa (escondida para viewer) */}
+          {!isViewer && (
+            <Card className="bg-card/50 backdrop-blur-sm">
+              <CardContent className="pt-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="md:col-span-2">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                      {/* Form simples para evitar submit global e parar propagação de teclas */}
+                      <form
+                        onSubmit={(e) => { e.preventDefault(); buscar(); }}
+                      >
+                        <Input
+                          placeholder="Nome completo ou matrícula (ex.: 2024-001)"
+                          value={consulta}
+                          onChange={(e) => setConsulta(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              buscar();
+                            }
+                            e.stopPropagation();
+                          }}
+                          autoComplete="off"
+                          className="pl-10"
+                        />
+                      </form>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button onClick={buscar}>Buscar</Button>
+                    <Select
+                      value={statusFilter}
+                      onValueChange={(v: StatusFilter) => setStatusFilter(v)}
                     >
-                      <Input
-                        placeholder="Nome completo ou matrícula (ex.: 2024-001)"
-                        value={consulta}
-                        onChange={(e) => setConsulta(e.target.value)}
-                        onKeyDown={(e) => {
-                          // evita que Enter/outras teclas “submetam/selecionem” elementos do form
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            buscar();
-                          }
-                          e.stopPropagation();
-                        }}
-                        autoComplete="off"
-                        className="pl-10"
-                      />
-                    </form>
+                      <SelectTrigger className="w-56">
+                        <SelectValue placeholder="Status" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-popover border-border">
+                        <SelectItem value="all">Abertas + Atrasadas</SelectItem>
+                        <SelectItem value="aberta">Somente Abertas</SelectItem>
+                        <SelectItem value="atrasada">Somente Atrasadas</SelectItem>
+                        <SelectItem value="paga">Somente Pagas</SelectItem>
+                        <SelectItem value="all_with_paid">Todas (inclui Pagas)</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
+
+                {membroId && (
+                  <div className="mt-3 text-sm text-muted-foreground">
+                    Membro: <span className="font-medium text-foreground">{membroNome}</span> • Matrícula: <span className="font-mono">{membroMatricula || '-'}</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Filtro de status (mostrar também para viewer) */}
+          {isViewer && (
+            <Card className="bg-card/50 backdrop-blur-sm">
+              <CardContent className="pt-6">
                 <div className="flex gap-2">
-                  <Button onClick={buscar}>Buscar</Button>
                   <Select
                     value={statusFilter}
                     onValueChange={(v: StatusFilter) => setStatusFilter(v)}
@@ -633,265 +748,284 @@ export default function Mensalidades() {
                       <SelectItem value="all_with_paid">Todas (inclui Pagas)</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
-              </div>
-
-              {membroId && (
-                <div className="mt-3 text-sm text-muted-foreground">
-                  Membro: <span className="font-medium text-foreground">{membroNome}</span> • Matrícula: <span className="font-mono">{membroMatricula || '-'}</span>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Filtro de status (mostrar também para viewer) */}
-        {isViewer && (
-          <Card className="bg-card/50 backdrop-blur-sm">
-            <CardContent className="pt-6">
-              <div className="flex gap-2">
-                <Select
-                  value={statusFilter}
-                  onValueChange={(v: StatusFilter) => setStatusFilter(v)}
-                >
-                  <SelectTrigger className="w-56">
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-popover border-border">
-                    <SelectItem value="all">Abertas + Atrasadas</SelectItem>
-                    <SelectItem value="aberta">Somente Abertas</SelectItem>
-                    <SelectItem value="atrasada">Somente Atrasadas</SelectItem>
-                    <SelectItem value="paga">Somente Pagas</SelectItem>
-                    <SelectItem value="all_with_paid">Todas (inclui Pagas)</SelectItem>
-                  </SelectContent>
-                </Select>
-                {membroId && (
-                  <div className="self-center text-sm text-muted-foreground">
-                    Membro: <span className="font-medium text-foreground">{membroNome}</span> • Matrícula: <span className="font-mono">{membroMatricula || '-'}</span>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Tabela / Estado inicial */}
-        {membroId ? (
-          <Card className="bg-card/30 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle>
-                {filtered.length} mensalidade{filtered.length !== 1 ? 's' : ''} encontrada
-                {filtered.length !== 1 ? 's' : ''}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {loading ? (
-                <div className="space-y-4">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-16 bg-muted/20 rounded animate-pulse" />
-                  ))}
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        checked={selectAll}
-                        onCheckedChange={(c) => setSelectAll(Boolean(c))}
-                        id="selectAll"
-                      />
-                      <label htmlFor="selectAll" className="text-sm text-muted-foreground cursor-pointer">
-                        Selecionar todas filtradas (apenas não pagas) ({filtered.filter(f => f.ui_status !== 'paga').length})
-                      </label>
+                  {membroId && (
+                    <div className="self-center text-sm text-muted-foreground">
+                      Membro: <span className="font-medium text-foreground">{membroNome}</span> • Matrícula: <span className="font-mono">{membroMatricula || '-'}</span>
                     </div>
-                    <div className="text-sm text-muted-foreground">
-                      Total selecionado:{' '}
-                      <span className="font-semibold">
-                        {formatCurrency(totalSelecionado)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-border/50">
-                        <TableHead></TableHead>
-                        <TableHead>Referência</TableHead>
-                        <TableHead>Vencimento</TableHead>
-                        <TableHead>Valor</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="w-[160px]">Ações</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filtered.map((r) => {
-                        const isPaid = r.ui_status === 'paga';
-                        return (
-                          <TableRow key={r.id} className="border-border/50">
-                            <TableCell className="w-10">
-                              <Checkbox
-                                checked={selectedIds.has(r.id)}
-                                onCheckedChange={(c) => toggleRow(r.id, Boolean(c), isPaid)}
-                                aria-label="Selecionar mensalidade"
-                                disabled={isPaid}
-                              />
-                            </TableCell>
-                            <TableCell className="font-mono">{r.refer}</TableCell>
-                            <TableCell>{new Date(r.dt_vencimento).toLocaleDateString('pt-BR')}</TableCell>
-                            <TableCell className="font-semibold">
-                              {formatCurrency(r.total_a_pagar_centavos)}
-                              {r.vl_desconto_centavos > 0 && (
-                                <div className="text-xs text-muted-foreground">
-                                  ({formatCurrency(r.valor_centavos)} - desc {formatCurrency(r.vl_desconto_centavos)})
-                                </div>
-                              )}
-                            </TableCell>
-                            <TableCell>{uiBadge(r.ui_status)}</TableCell>
-                            <TableCell>
-                              {isPaid ? (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="gap-2"
-                                  onClick={() => reimprimirCupom(r)}
-                                  title="Reimprimir cupom"
-                                >
-                                  <FileText className="h-4 w-4" />
-                                  Reimprimir
-                                </Button>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">—</span>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </>
-              )}
-
-              {!loading && filtered.length === 0 && (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Wallet className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                  <p>Nenhuma mensalidade encontrada</p>
+                  )}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        ) : (
-          <Card className="bg-card/30 backdrop-blur-sm">
-            <CardContent className="py-10 text-center text-muted-foreground">
-              {isViewer ? (
-                noLinkMsg
-                  ? <span>{noLinkMsg}</span>
-                  : (loading ? 'Carregando suas mensalidades…' : 'Sem dados para exibir.')
-              ) : (
-                <>Digite <strong>nome</strong> ou <strong>matrícula</strong> e clique em <strong>Buscar</strong> para listar as mensalidades.</>
-              )}
-            </CardContent>
-          </Card>
-        )}
+              </CardContent>
+            </Card>
+          )}
 
-        {/* Dialog pagamento em lote */}
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Confirmar pagamento</DialogTitle>
-              <DialogDescription>
-                {selectedIds.size} mensalidade(s) serão marcadas como pagas. O valor será o total de cada mensalidade (valor - desconto).
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <span className="text-sm text-muted-foreground">Forma de pagamento</span>
-
-                {/* Viewer: método travado em PIX */}
-                {isViewer ? (
-                  <div className="p-2 rounded border text-sm">
-                    PIX (fixo para seu perfil)
+          {/* Tabela / Estado inicial */}
+          {membroId ? (
+            <Card className="bg-card/30 backdrop-blur-sm">
+              <CardHeader>
+                <CardTitle>
+                  {filtered.length} mensalidade{filtered.length !== 1 ? 's' : ''} encontrada
+                  {filtered.length !== 1 ? 's' : ''}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {loading ? (
+                  <div className="space-y-4">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="h-16 bg-muted/20 rounded animate-pulse" />
+                    ))}
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2">
-                    <Select
-                      value={payPreset}
-                      onValueChange={(v: PayPreset) => setPayPreset(v)}
-                    >
-                      <SelectTrigger className="w-56">
-                        <SelectValue placeholder="Selecione" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-popover border-border">
-                        <SelectItem value="dinheiro">Dinheiro</SelectItem>
-                        <SelectItem value="pix">PIX</SelectItem>
-                        <SelectItem value="cartao">Cartão</SelectItem>
-                        <SelectItem value="transferencia">Transferência</SelectItem>
-                        <SelectItem value="outro">Outro (especificar)</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          checked={selectAll}
+                          onCheckedChange={(c) => setSelectAll(Boolean(c))}
+                          id="selectAll"
+                        />
+                        <label htmlFor="selectAll" className="text-sm text-muted-foreground cursor-pointer">
+                          Selecionar todas filtradas (apenas não pagas) ({filtered.filter(f => f.ui_status !== 'paga').length})
+                        </label>
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        Total selecionado:{' '}
+                        <span className="font-semibold">
+                          {formatCurrency(totalSelecionado)}
+                        </span>
+                      </div>
+                    </div>
 
-                    {payPreset === 'outro' && (
-                      <Input
-                        placeholder="Descreva o método (ex.: Cheque, Boleto, VA...)"
-                        value={customMethod}
-                        onChange={(e) => setCustomMethod(e.target.value)}
-                        className="flex-1"
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') e.preventDefault();
-                          e.stopPropagation();
-                        }}
-                      />
-                    )}
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-border/50">
+                          <TableHead></TableHead>
+                          <TableHead>Referência</TableHead>
+                          <TableHead>Vencimento</TableHead>
+                          <TableHead>Valor</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="w-[220px]">Ações</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filtered.map((r) => {
+                          const isPaid = r.ui_status === 'paga';
+                          return (
+                            <TableRow key={r.id} className="border-border/50">
+                              <TableCell className="w-10">
+                                <Checkbox
+                                  checked={selectedIds.has(r.id)}
+                                  onCheckedChange={(c) => toggleRow(r.id, Boolean(c), isPaid)}
+                                  aria-label="Selecionar mensalidade"
+                                  disabled={isPaid}
+                                />
+                              </TableCell>
+                              <TableCell className="font-mono">{r.refer}</TableCell>
+                              <TableCell>{new Date(r.dt_vencimento).toLocaleDateString('pt-BR')}</TableCell>
+                              <TableCell className="font-semibold">
+                                {formatCurrency(r.total_a_pagar_centavos)}
+                                {r.vl_desconto_centavos > 0 && (
+                                  <div className="text-xs text-muted-foreground">
+                                    ({formatCurrency(r.valor_centavos)} - desc {formatCurrency(r.vl_desconto_centavos)})
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell>{uiBadge(r.ui_status)}</TableCell>
+                              <TableCell className="space-x-2">
+                                {isPaid ? (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="gap-2 rounded-full h-9 px-3"
+                                      onClick={() => reimprimirCupom(r)}
+                                      title="Reimprimir cupom"
+                                    >
+                                      <FileText className="h-4 w-4" />
+                                      Reimprimir
+                                    </Button>
+
+                                    {!isViewer && (
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        className="gap-2 rounded-full h-9 px-3 shadow-sm"
+                                        onClick={() => pedirReembolso(r)}
+                                        disabled={refundingId === r.id}
+                                        title="Reembolsar (remover pagamentos e reabrir fatura)"
+                                      >
+                                        <RotateCcw className="h-4 w-4" />
+                                        {refundingId === r.id ? 'Reembolsando...' : 'Reembolsar'}
+                                      </Button>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </>
+                )}
+
+                {!loading && filtered.length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Wallet className="h-12 w-12 mx-auto mb-2 opacity-20" />
+                    <p>Nenhuma mensalidade encontrada</p>
                   </div>
                 )}
-
-                {!isViewer && payPreset === 'outro' && !customMethod.trim() && (
-                  <p className="text-xs text-muted-foreground">Informe o método personalizado.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="bg-card/30 backdrop-blur-sm">
+              <CardContent className="py-10 text-center text-muted-foreground">
+                {isViewer ? (
+                  noLinkMsg
+                    ? <span>{noLinkMsg}</span>
+                    : (loading ? 'Carregando suas mensalidades…' : 'Sem dados para exibir.')
+                ) : (
+                  <>Digite <strong>nome</strong> ou <strong>matrícula</strong> e clique em <strong>Buscar</strong> para listar as mensalidades.</>
                 )}
-              </div>
+              </CardContent>
+            </Card>
+          )}
 
-              <div className="p-3 rounded bg-muted/30 text-sm flex items-center justify-between">
-                <span>Total a quitar</span>
-                <span className="font-semibold">{formatCurrency(totalSelecionado)}</span>
-              </div>
+          {/* Dialog pagamento em lote */}
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Confirmar pagamento</DialogTitle>
+                <DialogDescription>
+                  {selectedIds.size} mensalidade(s) serão marcadas como pagas. O valor será o total de cada mensalidade (valor - desconto).
+                </DialogDescription>
+              </DialogHeader>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" onClick={() => setDialogOpen(false)}>
-                  Cancelar
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <span className="text-sm text-muted-foreground">Forma de pagamento</span>
+
+                  {/* Viewer: método travado em PIX */}
+                  {isViewer ? (
+                    <div className="p-2 rounded border text-sm">
+                      PIX (fixo para seu perfil)
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={payPreset}
+                        onValueChange={(v: PayPreset) => setPayPreset(v)}
+                      >
+                        <SelectTrigger className="w-56">
+                          <SelectValue placeholder="Selecione" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-popover border-border">
+                          <SelectItem value="dinheiro">Dinheiro</SelectItem>
+                          <SelectItem value="pix">PIX</SelectItem>
+                          <SelectItem value="cartao">Cartão</SelectItem>
+                          <SelectItem value="transferencia">Transferência</SelectItem>
+                          <SelectItem value="outro">Outro (especificar)</SelectItem>
+                        </SelectContent>
+                      </Select>
+
+                      {payPreset === 'outro' && (
+                        <Input
+                          placeholder="Descreva o método (ex.: Cheque, Boleto, VA...)"
+                          value={customMethod}
+                          onChange={(e) => setCustomMethod(e.target.value)}
+                          className="flex-1"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') e.preventDefault();
+                            e.stopPropagation();
+                          }}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {!isViewer && payPreset === 'outro' && !customMethod.trim() && (
+                    <p className="text-xs text-muted-foreground">Informe o método personalizado.</p>
+                  )}
+                </div>
+
+                <div className="p-3 rounded bg-muted/30 text-sm flex items-center justify-between">
+                  <span>Total a quitar</span>
+                  <span className="font-semibold">{formatCurrency(totalSelecionado)}</span>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="outline" onClick={() => setDialogOpen(false)}>
+                    Cancelar
+                  </Button>
+                  <Button
+                    onClick={pagarSelecionadas}
+                    disabled={paying || (!isViewer && (payPreset === 'outro' && !customMethod.trim()))}
+                    className="bg-gradient-sacred hover:opacity-90"
+                  >
+                    {paying ? 'Processando...' : 'Confirmar pagamento'}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Pergunta: imprimir cupom fiscal? */}
+          <Dialog open={askReceiptOpen} onOpenChange={setAskReceiptOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Imprimir cupom fiscal?</DialogTitle>
+                <DialogDescription>
+                  Deseja gerar o cupom fiscal do(s) pagamento(s) registrado(s)?
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAskReceiptOpen(false)}>
+                  Não agora
                 </Button>
-                <Button
-                  onClick={pagarSelecionadas}
-                  disabled={paying || (!isViewer && (payPreset === 'outro' && !customMethod.trim()))}
-                  className="bg-gradient-sacred hover:opacity-90"
+                <Button onClick={imprimirCupom} className="gap-2">
+                  <FileText className="h-4 w-4" />
+                  Gerar cupom
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Pop-up de confirmação de reembolso */}
+          <AlertDialog open={refundDialogOpen} onOpenChange={setRefundDialogOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Confirmar reembolso</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Isso vai <strong>remover todos os pagamentos</strong> registrados para esta fatura
+                  e reabri-la como <em>pendente</em> (ou <em>vencida</em> se o vencimento já passou).
+                  <br />
+                  <br />
+                  <span className="text-foreground">
+                    <span className="font-medium">Referência:</span>{' '}
+                    <span className="font-mono">{refundTarget?.refer}</span>
+                  </span>
+                  <br />
+                  <span className="text-foreground">
+                    <span className="font-medium">Valor:</span>{' '}
+                    {refundTarget ? formatCurrency(refundTarget.total_a_pagar_centavos) : '—'}
+                  </span>
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="rounded-full">Cancelar</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={confirmarReembolso}
+                  className="bg-red-600 hover:bg-red-700 text-white rounded-full gap-2"
                 >
-                  {paying ? 'Processando...' : 'Confirmar pagamento'}
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        {/* Pergunta: imprimir cupom fiscal? */}
-        <Dialog open={askReceiptOpen} onOpenChange={setAskReceiptOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Imprimir cupom fiscal?</DialogTitle>
-              <DialogDescription>
-                Deseja gerar o cupom fiscal do(s) pagamento(s) registrado(s)?
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setAskReceiptOpen(false)}>
-                Não agora
-              </Button>
-              <Button onClick={imprimirCupom} className="gap-2">
-                <FileText className="h-4 w-4" />
-                Gerar cupom
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
+                  <RotateCcw className="h-4 w-4" />
+                  Confirmar reembolso
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      </FeatureGate>  
     </DashboardLayout>
   );
 }

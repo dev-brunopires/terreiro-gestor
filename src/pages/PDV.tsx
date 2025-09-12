@@ -1,41 +1,49 @@
 "use client";
 
 /**
- * PDV.tsx — POS multi-tenant com gestão completa
- * Abas:
- *  - Vender: fluxo PDV
- *  - Produtos: cadastro rápido (com upload de foto)
- *  - Categorias: CRUD completo
- *  - Lista: tabela de produtos (foto, editar, excluir)
- *
- * Requer:
- * - Tabela produtos com (recomendado) coluna opcional: imagem_url text
- * - Bucket Supabase Storage "produtos"
+ * PDV.tsx — POS multi-tenant compatível com seu schema
+ * - Usa: public.pos_vendas + public.pos_venda_itens
+ * - Baixa estoque em produtos.estoque_atual e registra em movimentacoes_estoque
+ * - Pagamentos: public.pagamentos_diversos (tipo = 'loja')
  */
-
+import FeatureGate from "@/components/FeatureGate";
+import UpgradeCard from "@/components/UpgradeCard";
+import { Upload, Download } from "lucide-react";
+import * as XLSX from "xlsx";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useOrg } from "@/contexts/OrgContext";
 import { DashboardLayout } from "@/components/DashboardLayout";
-
+import { SectionHeader } from "@/components/SectionHeader"; // no topo
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
 
 import {
   Search, Barcode, ShoppingCart, Trash2, CreditCard, Percent,
-  Package, PlusCircle, Save, Printer, ImageIcon, Pencil, X, FolderOpen
+  Package, PlusCircle, Save, Printer, ImageIcon, Pencil, X, FolderOpen,
+  History, RefreshCcw
 } from "lucide-react";
 
 /* ================== Tipos ================== */
@@ -49,12 +57,34 @@ export type Produto = {
   estoque_atual?: number | null;
   categoria_id?: string | null;
   ativo?: boolean | null;
-  imagem_url?: string | null; // opcional
-  descricao?: string | null;  // opcional
+  imagem_url?: string | null;
+  descricao?: string | null;
 };
 
 export type Categoria = { id: string; nome: string; ativo?: boolean | null };
-export type Membro = { id: string; nome: string };
+
+export type Membro = { id: string; nome: string; matricula?: string | null };
+
+type MetodoPagamento = "PIX" | "Cartão" | "Dinheiro";
+
+type VendaItem = {
+  venda_id: string;
+  produto_id: string;
+  quantidade: number;
+  preco_centavos: number;
+  total_centavos: number;
+  produto_nome?: string | null;
+  produto_unidade?: string | null;
+};
+
+type Venda = {
+  id: string;
+  created_at: string;
+  total_centavos: number;
+  metodo_pagamento?: string | null;
+  membro_id?: string | null;
+  numero?: number | null; // <-- novo
+};
 
 /* ================== Helpers ================== */
 const cents = (v: number) => Math.max(0, Math.round(v));
@@ -68,11 +98,21 @@ const intFromInput = (s: string) => {
   const n = parseInt(s || "0", 10);
   return Number.isFinite(n) ? n : 0;
 };
+// ✅ utilzinho seguro para obter range mesmo se vazio
+function safeRange(ws: XLSX.WorkSheet): XLSX.Range {
+  if (!ws["!ref"]) return { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
+  return XLSX.utils.decode_range(ws["!ref"]);
+}
 
-/* Edge Functions fallback list — ajuste se seus nomes diferirem */
-const EDGE_FUNCTIONS = ["pos-create-sale"] as const;
+// ✅ helper para criar uma sheet com cabeçalho (se a lista estiver vazia)
+function sheetWithHeaders<T extends object>(rows: T[], headers: string[]) {
+  if (rows.length > 0) return XLSX.utils.json_to_sheet(rows, { origin: 0 });
 
-/* ================== ErrorBoundary ================== */
+  // cria só o cabeçalho quando não há dados
+  const ws = XLSX.utils.aoa_to_sheet([headers]);
+  return ws;
+}
+/* ============ ErrorBoundary ============ */
 class NiceErrorBoundary extends React.Component<{ children: React.ReactNode }, { err: any }> {
   constructor(props: any) {
     super(props);
@@ -94,9 +134,7 @@ class NiceErrorBoundary extends React.Component<{ children: React.ReactNode }, {
             </CardHeader>
             <CardContent className="text-sm">
               <p className="text-destructive mb-2">{String(this.state.err?.message || this.state.err)}</p>
-              <p className="text-muted-foreground">
-                Veja o console do navegador para detalhes.
-              </p>
+              <p className="text-muted-foreground">Veja o console do navegador para detalhes.</p>
             </CardContent>
           </Card>
         </div>
@@ -106,52 +144,260 @@ class NiceErrorBoundary extends React.Component<{ children: React.ReactNode }, {
   }
 }
 
+/* ================== Funções de Infra POS ================== */
+
+/**
+ * Cria a venda em `pos_vendas` e os itens em `pos_venda_itens`.
+ * Depois baixa estoque em `produtos.estoque_atual` e registra em `movimentacoes_estoque`.
+ */
+/**
+ * Cria a venda em `pos_vendas` e os itens em `pos_venda_itens`.
+ * Depois valida saldo e registra apenas as saídas em `movimentacoes_estoque`
+ * (não atualiza diretamente `produtos.estoque_atual`, evitando dupla baixa).
+ */
+async function createPosSale(
+  supabaseClient: any,
+  args: {
+    org_id: string;
+    terreiro_id: string;
+    membro_id?: string | null;
+    itens: { produto_id: string; qtd: number; preco_unit_centavos: number }[];
+    subtotal_centavos: number;
+    desconto_centavos?: number;
+    total_centavos: number;
+    pago_centavos: number;
+    troco_centavos: number;
+    metodo_pagamento: string;
+    observacoes?: string | null;
+    usuario_operacao?: string | null;
+  }
+) {
+  const {
+    org_id,
+    terreiro_id,
+    membro_id = null,
+    itens,
+    subtotal_centavos,
+    desconto_centavos = 0,
+    total_centavos,
+    pago_centavos,
+    troco_centavos,
+    metodo_pagamento,
+    observacoes = null,
+    usuario_operacao = null,
+  } = args;
+
+  if (!Array.isArray(itens) || itens.length === 0) {
+    throw new Error("Nenhum item na venda.");
+  }
+
+  // ========= 0) Validação de saldo (AGORA filtra por org_id) =========
+  const ids = itens.map((i) => i.produto_id);
+  const { data: prodsCheck, error: checkErr } = await supabaseClient
+    .from("produtos")
+    .select("id, nome, estoque_atual")
+    .in("id", ids)
+    .eq("org_id", org_id);
+  if (checkErr) throw checkErr;
+
+  const estoqueMap = new Map<string, { nome: string; q: number }>(
+    (prodsCheck || []).map((p: any) => [p.id, { nome: p.nome, q: Number(p.estoque_atual ?? 0) }])
+  );
+
+  for (const it of itens) {
+    const reg = estoqueMap.get(it.produto_id) || { nome: "Produto", q: 0 };
+    if ((it.qtd ?? 0) <= 0) {
+      throw new Error(`Quantidade inválida para "${reg.nome}".`);
+    }
+    if (it.qtd > reg.q) {
+      throw new Error(
+        `Estoque insuficiente para "${reg.nome}". Disponível: ${reg.q}, solicitado: ${it.qtd}.`
+      );
+    }
+  }
+
+  // ========= 1) Cria a venda (pos_vendas) =========
+  const { data: venda, error: vendaErr } = await supabaseClient
+    .from("pos_vendas")
+    .insert([
+      {
+        org_id,
+        terreiro_id,
+        membro_id,
+        metodo_pagamento,
+        subtotal_centavos,
+        desconto_centavos,
+        total_centavos,
+        pago_centavos,
+        troco_centavos,
+        observacoes,
+        usuario_operacao,
+      },
+    ])
+    .select("id, created_at, total_centavos, metodo_pagamento, membro_id, numero")
+    .single();
+  if (vendaErr) throw vendaErr;
+
+  // ========= 2) Insere os itens (com fallback para itens_venda se necessário) =========
+  const itensRows = itens.map((i) => ({
+    venda_id: venda.id,
+    produto_id: i.produto_id,
+    quantidade: i.qtd,
+    preco_centavos: i.preco_unit_centavos,
+    total_centavos: i.qtd * i.preco_unit_centavos,
+    org_id,
+    terreiro_id,
+  }));
+
+  async function insertItensFlex() {
+    let res = await supabaseClient.from("pos_venda_itens").insert(itensRows);
+    if (!res.error) return;
+    if ((res.error as any)?.code === "42P01") {
+      // ambiente sem pos_venda_itens → tenta itens_venda
+      const compat = itensRows.map(({ org_id: _o, terreiro_id: _t, quantidade, preco_centavos, total_centavos, ...rest }: any) => ({
+        venda_id: rest.venda_id,
+        produto_id: rest.produto_id,
+        qtd: quantidade,
+        preco_unit_centavos: preco_centavos,
+        subtotal_centavos: total_centavos,
+      }));
+      res = await supabaseClient.from("itens_venda").insert(compat);
+    }
+    if (res.error) throw res.error;
+  }
+  try {
+    await insertItensFlex();
+  } catch (itensErr) {
+    await supabaseClient.from("pos_vendas").delete().eq("id", venda.id);
+    throw itensErr;
+  }
+
+  // ========= 3) Registra movimentações de saída =========
+  const movs = itens.map((it) => ({
+    produto_id: it.produto_id,
+    quantidade: it.qtd,
+    tipo: "saida",
+    referencia: "POS",
+    pos_venda_id: venda.id,
+    org_id,
+    terreiro_id,
+  }));
+  const { error: movErr } = await supabaseClient.from("movimentacoes_estoque").insert(movs);
+  if (movErr) {
+    await supabaseClient.from("pos_venda_itens").delete().eq("venda_id", venda.id);
+    await supabaseClient.from("pos_vendas").delete().eq("id", venda.id);
+    throw movErr;
+  }
+
+  // ========= 4) (IMEDIATO) Atualiza estoque_atual localmente =========
+  // Obs.: Se você criar o trigger no banco para refletir movimentacoes_estoque em produtos,
+  // esta etapa pode ser removida.
+  // ========= 4) NÃO ATUALIZA DIRETO O ESTOQUE (evita dupla baixa) =========
+// Removido o loop que chamava `supabase.rpc("debita_estoque_se_disponivel", ...)`
+// ou fazia UPDATE direto em `produtos.estoque_atual`.
+// Agora a baixa fica **somente** pelas inserções em `movimentacoes_estoque`
+// (e, se você usa trigger no banco, ele atualiza `produtos.estoque_atual`).
+
+
+  return venda as {
+    id: string;
+    created_at: string;
+    total_centavos: number;
+    metodo_pagamento?: string | null;
+    membro_id?: string | null;
+    numero?: number | null; // <--- GARANTA QUE ESTÁ AQUI;
+  };
+}
+
+
+
+/**
+ * Registra o pagamento de PDV em `pagamentos_diversos` (tipo 'loja').
+ */
+// mude a assinatura para aceitar o numero
+async function registrarPagamentoPOS(args: {
+  venda_id: string;
+  venda_numero?: number | null;
+  org_id: string;
+  terreiro_id: string;
+  membro_id: string | null;
+  total_centavos: number;
+  metodo: string;
+}) {
+  const { venda_id, venda_numero, org_id, terreiro_id, membro_id, total_centavos, metodo } = args;
+
+// dentro de registrarPagamentoPOS(...)
+  const { error } = await supabase.from("pagamentos_diversos").insert({
+  org_id,
+  terreiro_id,
+  membro_id,
+  tipo: "loja",
+  descricao: `PDV: venda ${venda_id}`,
+  metodo,
+  valor_centavos: total_centavos,
+  usuario_operacao: "pdv",
+  observacoes: "POS",
+  pos_venda_id: venda_id,   // <<-- novo
+});
+
+  if (error) throw error;
+}
+
+
 /* ================== Página ================== */
 export default function PDVPage() {
   const { toast } = useToast();
   const { session } = useAuth();
   const { currentOrg } = useOrg();
 
-  // Fallback automático de org usando profiles.org_id
+  // fallback org pelo profile
   const [fallbackOrgId, setFallbackOrgId] = useState<string | null>(null);
   const [fallbackOrgName, setFallbackOrgName] = useState<string | null>(null);
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [loadingOrg, setLoadingOrg] = useState<boolean>(false);
 
-  // orgId efetivo usado pela página (contexto OU fallback)
   const orgId = currentOrg?.id ?? fallbackOrgId;
+  // no seu schema, terreiro_id = org_id
   const terreiroId = orgId;
   const orgName = currentOrg?.nome ?? fallbackOrgName ?? undefined;
 
   const [produtos, setProdutos] = useState<Produto[]>([]);
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [membros, setMembros] = useState<Membro[]>([]);
+  // ===== Cliente
+  const [clienteModo, setClienteModo] = useState<"avulso" | "membro">("avulso");
+  const [clienteDialogOpen, setClienteDialogOpen] = useState(false);
+  const [clienteQuery, setClienteQuery] = useState(""); // busca por nome | matrícula
 
-  // Abas / filtros
-  const [activeTab, setActiveTab] = useState<"vender" | "produtos" | "categorias" | "lista">("vender");
+  // ===== Desconto
+  const [descontoModo, setDescontoModo] = useState<"valor" | "percent">("valor")
+  // ======= Estado principal (com persistência) =======
+  const STORAGE_KEY = "pdv_state_v2";
+
+  const [activeTab, setActiveTab] = useState<"vender" | "produtos" | "categorias" | "lista" | "historico">("vender");
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState<string | null>(null);
   const [barcode, setBarcode] = useState("");
 
-  // Carrinho / cliente
   const [cart, setCart] = useState<{ produto: Produto; quantidade: number }[]>([]);
-  const [selectedMembro, setSelectedMembro] = useState<string | null>(null); // null = avulso
+  const [selectedMembro, setSelectedMembro] = useState<string | null>(null);
 
-  // Pagamento
   const [descontoReais, setDescontoReais] = useState<string>("0,00");
   const [descontoPercent, setDescontoPercent] = useState<string>("0");
-  const [metodoPagamento, setMetodoPagamento] = useState<"PIX" | "Cartão" | "Dinheiro">("PIX");
+  const [metodoPagamento, setMetodoPagamento] = useState<MetodoPagamento>("PIX");
   const [pagoReais, setPagoReais] = useState<string>("0,00");
 
   const [isFinishing, setIsFinishing] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [lastSale, setLastSale] = useState<{
     venda_id?: string;
+    venda_numero?: number | null; 
     itens: { produto: Produto; quantidade: number }[];
     subtotal: number; desconto: number; total: number; pago: number; troco: number; membro_nome?: string;
   } | null>(null);
   const receiptRef = useRef<HTMLDivElement>(null);
 
-  // Form produto (cadastro rápido)
+  // produto rápido
   const [pNome, setPNome] = useState("");
   const [pSku, setPSku] = useState("");
   const [pBarras, setPBarras] = useState("");
@@ -163,12 +409,12 @@ export default function PDVPage() {
   const [pArquivo, setPArquivo] = useState<File | null>(null);
   const [savingProduct, setSavingProduct] = useState(false);
 
-  // Categorias CRUD
+  // categorias
   const [catModalOpen, setCatModalOpen] = useState(false);
   const [catEditing, setCatEditing] = useState<Categoria | null>(null);
   const [catNome, setCatNome] = useState("");
 
-  // Produto edição
+  // edição produto
   const [prodModalOpen, setProdModalOpen] = useState(false);
   const [editing, setEditing] = useState<Produto | null>(null);
   const [edNome, setEdNome] = useState("");
@@ -181,20 +427,79 @@ export default function PDVPage() {
   const [edDescricao, setEdDescricao] = useState("");
   const [edArquivo, setEdArquivo] = useState<File | null>(null);
 
-  /* ============ Fallback de org (profiles.org_id) ============ */
+  // histórico
+  const [historico, setHistorico] = useState<Venda[]>([]);
+  const [historicoTable, setHistoricoTable] = useState<string | null>(null);
+  const [historicoSearch, setHistoricoSearch] = useState("");
+  const [loadingHistorico, setLoadingHistorico] = useState(false);
+
+  // confirmação de reembolso
+  const [confirmRefundOpen, setConfirmRefundOpen] = useState(false);
+  const [refundTarget, setRefundTarget] = useState<{ id: string } | null>(null);
+  const openRefundDialog = (id: string) => {
+    setRefundTarget({ id });
+    setConfirmRefundOpen(true);
+  };
+
+  /* ============ Persistência (load) ============ */
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (s.activeTab) setActiveTab(s.activeTab);
+      if (Array.isArray(s.cart)) setCart(s.cart);
+      if (typeof s.selectedMembro !== "undefined") setSelectedMembro(s.selectedMembro);
+      if (typeof s.descontoReais === "string") setDescontoReais(s.descontoReais);
+      if (typeof s.descontoPercent === "string") setDescontoPercent(s.descontoPercent);
+      if (typeof s.metodoPagamento === "string") setMetodoPagamento(s.metodoPagamento);
+      if (typeof s.pagoReais === "string") setPagoReais(s.pagoReais);
+    } catch {}
+  }, []);
+
+  /* ============ Persistência (save) ============ */
+  useEffect(() => {
+    const state = {
+      activeTab,
+      cart,
+      selectedMembro,
+      descontoReais,
+      descontoPercent,
+      metodoPagamento,
+      pagoReais,
+    };
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {}
+  }, [activeTab, cart, selectedMembro, descontoReais, descontoPercent, metodoPagamento, pagoReais]);
+
+  /* ============ Aviso sair com carrinho cheio ============ */
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (cart.length > 0) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [cart.length]);
+
+  /* ============ Fallback de org ============ */
   useEffect(() => {
     if (currentOrg?.id || fallbackOrgId || !session?.user?.id) return;
     setLoadingOrg(true);
     (async () => {
       try {
-        const { data: profile, error: e1 } = await supabase
+        const { data: pfRows, error: e1 } = await supabase
           .from("profiles")
           .select("org_id")
           .eq("user_id", session.user.id)
-          .maybeSingle();
+          .order("created_at", { ascending: false })
+          .limit(1);
         if (e1) throw e1;
 
-        const pfOrgId = profile?.org_id ?? null;
+        const pfOrgId = pfRows?.[0]?.org_id ?? null;
         setFallbackOrgId(pfOrgId);
 
         if (pfOrgId) {
@@ -240,7 +545,7 @@ export default function PDVPage() {
 
       const { data: mems, error: e3 } = await supabase
         .from("membros")
-        .select("id, nome")
+        .select("id, nome, matricula") // <— add matricula
         .eq("org_id", oid)
         .eq("ativo", true)
         .order("nome");
@@ -260,7 +565,74 @@ export default function PDVPage() {
     if (orgId) loadAll(orgId);
   }, [orgId]);
 
-  /* ============ Filtros/Busca (Catálogo) ============ */
+  /* ============ Histórico de vendas (POS) ============ */
+  const mapVendaRow = (row: any): Venda => ({
+    id: String(row?.id ?? ""),
+    created_at: row?.created_at ?? new Date().toISOString(),
+    total_centavos: Number(row?.total_centavos ?? 0) || 0,
+    metodo_pagamento: row?.metodo_pagamento ?? null,
+    membro_id: row?.membro_id ?? null,
+    numero: row?.numero ?? null, // <---
+  });
+
+  const loadHistorico = async (oid: string) => {
+    setLoadingHistorico(true);
+    try {
+      const { data, error } = await supabase
+        .from("pos_vendas")
+        .select("*")
+        .eq("org_id", oid)
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+
+      const parsed = (data || []).map(mapVendaRow).filter(v => v.id);
+
+      if (parsed.length) {
+        const ids = parsed.map(v => v.id);
+        const { data: itens, error: itErr } = await supabase
+          .from("pos_venda_itens")
+          .select("venda_id, produto_id, quantidade, preco_centavos, total_centavos")
+          .in("venda_id", ids);
+        if (!itErr && itens?.length) {
+          const prodIds = Array.from(new Set(itens.map(i => i.produto_id)));
+          const { data: prods } = await supabase
+            .from("produtos")
+            .select("id, nome, unidade")
+            .in("id", prodIds);
+          const prodMap = new Map((prods || []).map(p => [p.id, p]));
+          const itensByVenda = new Map<string, VendaItem[]>();
+          for (const it of itens) {
+            const p = prodMap.get(it.produto_id);
+            const enr: VendaItem = {
+              ...it,
+              produto_nome: (p as any)?.nome ?? null,
+              produto_unidade: (p as any)?.unidade ?? null,
+            } as any;
+            const arr = itensByVenda.get(it.venda_id) || [];
+            arr.push(enr);
+            itensByVenda.set(it.venda_id, arr);
+          }
+          parsed.forEach(v => { v.itens = itensByVenda.get(v.id) || []; });
+        }
+      }
+
+      setHistorico(parsed);
+      setHistoricoTable("pos_vendas");
+    } catch (e: any) {
+      console.warn("[PDV] histórico POS falhou:", e?.message || e);
+      setHistorico([]);
+      setHistoricoTable(null);
+    } finally {
+      setLoadingHistorico(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "historico" && orgId) loadHistorico(orgId);
+  }, [activeTab, orgId]);
+
+  /* ============ Catálogo / Carrinho ============ */
   const visibleProdutos = useMemo(() => {
     let list = produtos;
     if (cat) list = list.filter((p) => p.categoria_id === cat);
@@ -275,8 +647,15 @@ export default function PDVPage() {
     }
     return list;
   }, [produtos, cat, search]);
+  const membrosFiltrados = useMemo(() => {
+  const q = clienteQuery.trim().toLowerCase();
+  if (!q) return membros;
+  return membros.filter(m =>
+    (m.nome || "").toLowerCase().includes(q) ||
+    (m.matricula || "").toLowerCase().includes(q)
+  );
+}, [membros, clienteQuery]);
 
-  /* ============ Carrinho ============ */
   const addToCart = (produto: Produto, qtt = 1) => {
     setCart((prev) => {
       const idx = prev.findIndex((ci) => ci.produto.id === produto.id);
@@ -299,18 +678,20 @@ export default function PDVPage() {
   );
 
   const descontoManualCentavos = useMemo(() => {
-    const reaisCents = moneyStrToCents(descontoReais);
-    const pct = Number.isFinite(parseFloat(descontoPercent)) ? parseFloat(descontoPercent) : 0;
-    const byValue = reaisCents;
-    const byPct = Math.round((subtotal * pct) / 100);
-    return Math.min(subtotal, Math.max(byValue, byPct));
-  }, [descontoReais, descontoPercent, subtotal]);
+    const valorReaisCents = moneyStrToCents(descontoReais);
+    const pct = Number.isFinite(parseFloat(descontoPercent)) ? Math.max(0, Math.min(100, parseFloat(descontoPercent))) : 0;
+
+    const byValue = Math.min(subtotal, valorReaisCents);
+    const byPct   = Math.min(subtotal, Math.round((subtotal * pct) / 100));
+
+    return descontoModo === "valor" ? byValue : byPct;
+  }, [descontoReais, descontoPercent, subtotal, descontoModo]);
+
 
   const total = useMemo(() => Math.max(0, subtotal - descontoManualCentavos), [subtotal, descontoManualCentavos]);
   const pagoCentavos = useMemo(() => moneyStrToCents(pagoReais), [pagoReais]);
   const troco = useMemo(() => Math.max(0, pagoCentavos - total), [pagoCentavos, total]);
 
-  /* ============ Código de barras ============ */
   const onBarcodeEnter = async () => {
     const code = barcode.trim();
     if (!code || !orgId) return;
@@ -335,96 +716,40 @@ export default function PDVPage() {
       addToCart(data as Produto, 1);
       setBarcode("");
     } else {
-      toast({
-        title: "Código não encontrado",
-        description: `Nenhum produto com código ${code}.`,
-        variant: "destructive",
-      });
+      toast({ title: "Código não encontrado", description: `Nenhum produto com código ${code}.`, variant: "destructive" });
     }
   };
 
-  /* ============ Finalização (Edges alinhadas + fallback/diagnóstico) ============ */
-  const callEdge = async (payload: any) => {
-    const supabaseUrl =
-      (supabase as any)?.supabaseUrl || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-
-    const invokeOnce = async (fn: string) => {
-      // 1) tenta via SDK
-      try {
-        const { data, error } = await supabase.functions.invoke(fn, { body: payload });
-        if (error) throw error;
-        return data;
-      } catch (sdkErr: any) {
-        console.warn(`[PDV] invoke via SDK falhou para '${fn}':`, sdkErr?.message || sdkErr);
-
-        // 2) fallback: fetch direto com Bearer
-        try {
-          const { data: sess } = await supabase.auth.getSession();
-          const token = sess?.session?.access_token ?? "";
-          const url = `${supabaseUrl}/functions/v1/${fn}`;
-          const res = await fetch(url, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "authorization": token ? `Bearer ${token}` : "",
-            },
-            body: JSON.stringify(payload),
-          });
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`HTTP ${res.status} — ${text}`);
-          }
-          return await res.json();
-        } catch (fetchErr: any) {
-          throw new Error(`Edge '${fn}' indisponível: ${fetchErr?.message || fetchErr}`);
-        }
-      }
-    };
-
-    let lastErr: any = null;
-    for (const fn of EDGE_FUNCTIONS) {
-      try {
-        return await invokeOnce(fn);
-      } catch (e) {
-        lastErr = e;
-        console.warn(`[PDV] Edge '${fn}' falhou. Tentando próxima…`, e);
-      }
-    }
-    throw lastErr || new Error("Falha ao chamar Edge Function de venda");
-  };
-
+  /* ============ Finalização (POS) ============ */
   const finishSale = async (print = true) => {
     if (!orgId || !terreiroId) {
-      toast({
-        title: "Organização não encontrada",
-        description: "Não foi possível detectar sua organização automaticamente.",
-        variant: "destructive",
-      });
+      toast({ title: "Selecione uma organização", description: "org_id/terreiro_id ausente.", variant: "destructive" });
       return;
     }
+
     if (cart.length === 0) {
-      toast({ title: "Carrinho vazio", description: "Adicione itens antes de finalizar." });
+      toast({ title: "Carrinho vazio", description: "Adicione itens para finalizar.", variant: "destructive" });
       return;
     }
+
     if (pagoCentavos < total) {
-      toast({ title: "Pagamento insuficiente", description: `Falta ${fmt(total - pagoCentavos)}.`, variant: "destructive" });
+      toast({ title: "Pagamento insuficiente", description: "Valor pago é menor que o total.", variant: "destructive" });
       return;
     }
 
     setIsFinishing(true);
     try {
-      const itens = cart.map((ci) => ({
+      const itensForInsert = cart.map(ci => ({
         produto_id: ci.produto.id,
-        quantidade: ci.quantidade,
-        preco_centavos: ci.produto.preco_centavos,
-        total_centavos: cents(ci.produto.preco_centavos * ci.quantidade),
+        qtd: Number(ci.quantidade) || 1,
+        preco_unit_centavos: cents(ci.produto.preco_centavos),
       }));
 
-      const payload = {
-        org_id: orgId,
-        terreiro_id: terreiroId, // compat com edge (espelhado se não vier)
-        membro_id: selectedMembro,
-        itens,
+      const venda = await createPosSale(supabase, {
+        org_id: String(orgId),
+        terreiro_id: String(terreiroId),
+        membro_id: selectedMembro ? String(selectedMembro) : null,
+        itens: itensForInsert,
         subtotal_centavos: subtotal,
         desconto_centavos: descontoManualCentavos,
         total_centavos: total,
@@ -433,38 +758,65 @@ export default function PDVPage() {
         metodo_pagamento: metodoPagamento,
         observacoes: null,
         usuario_operacao: session?.user?.email || session?.user?.id || "pdv",
-      };
+      });
 
-      const result = await callEdge(payload);
+      await registrarPagamentoPOS({
+        venda_id: venda.id,
+        venda_numero: venda.numero ?? null,   // <<< agora passa o número
+        org_id: String(orgId),
+        terreiro_id: String(terreiroId),
+        membro_id: selectedMembro,
+        total_centavos: total,
+        metodo: metodoPagamento,
+      });
 
-      const snap = {
-        venda_id: result?.venda_id as string | undefined,
-        itens: cart.map((ci) => ({ produto: ci.produto, quantidade: ci.quantidade })),
+      const snapshot = {
+        venda_id: venda.id,
+        venda_numero: venda.numero ?? null,
+        itens: cart,
         subtotal,
         desconto: descontoManualCentavos,
         total,
         pago: pagoCentavos,
         troco,
-        membro_nome: selectedMembro ? membros.find((m) => m.id === selectedMembro)?.nome : undefined,
+        membro_nome: selectedMembro ? (membros.find(m => m.id === selectedMembro)?.nome || undefined) : undefined,
+        metodo: metodoPagamento,
       };
-
-      setLastSale(snap);
-      setShowReceipt(true);
+      setLastSale(snapshot);
 
       if (print) {
         try {
-          await imprimirCupomESCPos(snap, orgName || "Terreiro", metodoPagamento);
-        } catch (err) {
-          console.warn("Falha ao imprimir cupom:", err);
-        }
+          imprimirCupomPDV(
+            {
+              venda_id: snapshot.venda_id,
+              venda_numero: snapshot.venda_numero, // <<-- AQUI!
+              itens: snapshot.itens,
+              subtotal: snapshot.subtotal,
+              desconto: snapshot.desconto,
+              total: snapshot.total,
+              pago: snapshot.pago,
+              troco: snapshot.troco,
+              membro_nome: snapshot.membro_nome,
+            },
+            orgName || String(orgId),
+            metodoPagamento
+          );
+        } catch {}
       }
-
+      setShowReceipt(!print);
       clearCart();
+      setPagoReais("0,00");
       setDescontoReais("0,00");
       setDescontoPercent("0");
-      setPagoReais("0,00");
+      toast({
+        title: "Venda concluída",
+        description: `#${venda.numero ?? venda.id} — ${fmt(total)}`
+      });
 
-      toast({ title: "Venda concluída", description: `Venda #${result?.venda_id || "-" } registrada com sucesso!` });
+      if (orgId) {
+        await loadAll(orgId);
+        await loadHistorico(orgId);
+      }
     } catch (e: any) {
       console.error(e);
       toast({ title: "Erro ao finalizar", description: e?.message || String(e), variant: "destructive" });
@@ -473,72 +825,238 @@ export default function PDVPage() {
     }
   };
 
-  /* ============ Impressão ESC/POS ============ */
-  async function imprimirCupomESCPos(
-    snap: {
-      venda_id?: string;
-      itens: { produto: Produto; quantidade: number }[];
-      total: number; pago: number; troco: number; desconto: number; subtotal: number; membro_nome?: string;
-    },
-    orgNameParam: string,
-    metodo: string
-  ) {
-    const now = new Date();
-    const pad = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s.padEnd(n));
-    const line = "-".repeat(32);
 
-    const encoder = new TextEncoder();
-    const ESC = 0x1b, GS = 0x1d;
-    const bytes: number[] = [];
+  /* ============ Cancelamento / Reembolso (POS) ============ */
 
-    bytes.push(ESC, 0x40);             // Initialize
-    bytes.push(ESC, 0x61, 0x01);       // align center
-    bytes.push(...encoder.encode((orgNameParam || "ORGANIZAÇÃO").toUpperCase() + "\n"));
-    bytes.push(...encoder.encode("CUPOM PDV\n"));
-    bytes.push(ESC, 0x61, 0x00);       // align left
-    bytes.push(...encoder.encode(now.toLocaleString("pt-BR") + "\n"));
-    if (snap.venda_id) bytes.push(...encoder.encode(`Venda: ${snap.venda_id}\n`));
-    if (snap.membro_nome) bytes.push(...encoder.encode(`Cliente: ${snap.membro_nome}\n`));
-    bytes.push(...encoder.encode(line + "\n"));
-
-    snap.itens.forEach(({ produto, quantidade }) => {
-      const nome = (produto.nome || "").toUpperCase();
-      const totalLinha = fmt(produto.preco_centavos * quantidade);
-      const row = (quantidade + "x " + nome).slice(0, 22).padEnd(22) + totalLinha.padStart(10);
-      bytes.push(...encoder.encode(row + "\n"));
-    });
-
-    bytes.push(...encoder.encode(line + "\n"));
-    if (snap.desconto > 0) bytes.push(...encoder.encode(pad("Descontos:", 22) + pad("-" + fmt(snap.desconto), 10) + "\n"));
-    bytes.push(...encoder.encode(pad("Total:", 22) + pad(fmt(snap.total), 10) + "\n"));
-    bytes.push(...encoder.encode(pad(`Pago (${metodo}):`, 22) + pad(fmt(snap.pago), 10) + "\n"));
-    if (snap.troco > 0) bytes.push(...encoder.encode(pad("Troco:", 22) + pad(fmt(snap.troco), 10) + "\n"));
-    bytes.push(...encoder.encode("\nObrigado pela preferência!\n\n"));
-
-    bytes.push(GS, 0x56, 0x42, 0x10); // Cut parcial
-
-    // abre a gaveta (edge separada)
-    try { await supabase.functions.invoke("pos-open-drawer", { body: { pin: 0, org_id: orgId, terreiro_id: terreiroId } }); } catch {}
-
-    const hasWindow = typeof window !== "undefined";
-    const LOCAL_PRINTER =
-      (hasWindow && (window as any).__PRINTER_URL__) ||
-      (hasWindow && localStorage.getItem("printer_url")) ||
-      "http://localhost:5179/print";
+  const actuallyRefund = async () => {
+    if (!orgId || !refundTarget?.id) return;
+    const vendaId = refundTarget.id;
 
     try {
-      const b64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
-      await fetch(LOCAL_PRINTER, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ bytes_base64: b64 }),
+      // 1) Reverter estoque: apaga movimentações de SAÍDA desta venda
+      const { error: delMovErr } = await supabase
+        .from("movimentacoes_estoque")
+        .delete()
+        .eq("org_id", orgId)
+        .eq("pos_venda_id", vendaId)
+        .eq("tipo", "saida");
+      if (delMovErr) throw delMovErr;
+
+      // 2) Apagar o pagamento gerado pelo PDV (usa pos_venda_id)
+      const { error: delPagErr } = await supabase
+        .from("pagamentos_diversos")
+        .delete()
+        .eq("org_id", orgId)
+        .eq("tipo", "loja")
+        .eq("pos_venda_id", vendaId);
+      if (delPagErr) throw delPagErr;
+
+      // 3) Apagar itens da venda
+      const { error: delItensErr } = await supabase
+        .from("pos_venda_itens")
+        .delete()
+        .eq("org_id", orgId)
+        .eq("venda_id", vendaId);
+      if (delItensErr) throw delItensErr;
+
+      // 4) Apagar a venda
+      const { error: delVendaErr } = await supabase
+        .from("pos_vendas")
+        .delete()
+        .eq("org_id", orgId)
+        .eq("id", vendaId);
+      if (delVendaErr) throw delVendaErr;
+
+      toast({ title: "Reembolso concluído", description: `Venda ${vendaId} cancelada.` });
+      setConfirmRefundOpen(false);
+      setRefundTarget(null);
+      await Promise.all([loadHistorico(orgId), loadAll(orgId)]);
+    } catch (e: any) {
+      toast({ title: "Falha ao reembolsar", description: e?.message || String(e), variant: "destructive" });
+    }
+  };
+
+
+
+  /* ============ Cupom HTML (modelo Mensalidades / 80mm) ============ */
+
+function abrirJanelaCupomPDV(html: string) {
+  // cria iframe oculto
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  iframe.setAttribute("aria-hidden", "true");
+  // usar srcdoc evita document.open/write e mantém mesma origem
+  (iframe as any).srcdoc = html;
+  document.body.appendChild(iframe);
+
+  const cleanup = () => {
+    try { document.body.removeChild(iframe); } catch {}
+  };
+
+  // **Escute no elemento iframe**, não no contentWindow
+  iframe.addEventListener("load", () => {
+    const w = iframe.contentWindow;
+    if (!w) { cleanup(); return; }
+    try {
+      // aguarda um frame para layout/render
+      requestAnimationFrame(() => {
+        try { w.focus(); w.print(); } catch (e) { console.error("[PDV] print erro:", e); }
+        // alguns browsers não disparam afterprint no iframe; faça cleanup por timeout
+        setTimeout(cleanup, 1000);
       });
     } catch (e) {
-      console.warn("Agente local de impressão indisponível:", e);
+      console.error("[PDV] print erro:", e);
+      cleanup();
     }
-  }
+  }, { once: true });
 
-  /* ============ Upload de imagem (Supabase Storage) ============ */
+  // fallback duro (se load nunca vier)
+  setTimeout(cleanup, 15000);
+}
+
+
+function gerarCupomHTMLPDV(args: {
+  orgNome: string;
+  membro?: string | null;
+  vendaNumero?: number | null;   // usamos o número da venda no cupom
+  metodo: string;
+  itens: { nome: string; qtd: number; unit_cent: number }[];
+  subtotal_cent: number;
+  desconto_cent: number;
+  total_cent: number;
+  pago_cent: number;
+  troco_cent: number;
+}) {
+  const fmtBRL = (c: number) =>
+    new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" })
+      .format((c || 0) / 100);
+
+  const dataHoraImpressao = new Date().toLocaleString("pt-BR");
+
+  const linhas = args.itens
+    .map((it) => {
+      const unit = fmtBRL(it.unit_cent);
+      const linhaTotal = fmtBRL(it.qtd * it.unit_cent);
+      return `<tr>
+        <td style="text-align:left">${it.qtd}×</td>
+        <td style="text-align:left">${(it.nome || '').toUpperCase()}</td>
+        <td style="text-align:right">${unit}</td>
+        <td style="text-align:right">${linhaTotal}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const descontoLinha =
+    args.desconto_cent > 0
+      ? `<div class="row"><span>Descontos</span><span>- ${fmtBRL(args.desconto_cent)}</span></div>`
+      : "";
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Cupom PDV</title>
+<style>
+  @page { size: 80mm auto; margin: 6mm; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  .wrap { width: 80mm; max-width: 80mm; }
+  .center { text-align: center; }
+  .title { font-weight: 700; margin: 6px 0; font-size: 14px; }
+  .muted { color: #444; font-size: 10px; line-height: 1.2; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 8px 0 4px; }
+  th, td { padding: 4px 0; border-bottom: 1px dashed #999; }
+  th { text-align: left; }
+  th.num, td.num { text-align: right; }
+  .row { display:flex; justify-content:space-between; font-size: 12px; margin: 2px 0; }
+  .tot { border-top: 1px dashed #999; padding-top: 6px; margin-top: 6px; font-weight: 700; font-size: 13px; }
+  .foot { border-top: 1px dashed #999; margin-top: 10px; padding-top: 6px; font-size: 10px; text-align: center; }
+  @media print { .no-print { display: none !important; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="center">
+      <div class="title">${(args.orgNome || "Comprovante").toUpperCase()}</div>
+      <div class="muted">Impresso em: ${dataHoraImpressao}</div>
+    </div>
+
+    <div class="muted" style="margin-top:6px">
+      ${typeof args.vendaNumero === "number" ? `Venda nº: ${args.vendaNumero}<br/>` : ``}
+      Cliente: ${args.membro || "Avulso"}<br/>
+      Método: ${args.metodo || "-"}
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:36px">Qtd</th>
+          <th>Item</th>
+          <th class="num" style="width:68px">Unit.</th>
+          <th class="num" style="width:72px">Total</th>
+        </tr>
+      </thead>
+      <tbody>${linhas}</tbody>
+    </table>
+
+    <div class="row"><span>Subtotal</span><span>${fmtBRL(args.subtotal_cent)}</span></div>
+    ${descontoLinha}
+    <div class="row tot"><span>Total</span><span>${fmtBRL(args.total_cent)}</span></div>
+    <div class="row"><span>Pago</span><span>${fmtBRL(args.pago_cent)}</span></div>
+    ${args.troco_cent > 0 ? `<div class="row"><span>Troco</span><span>${fmtBRL(args.troco_cent)}</span></div>` : ''}
+
+    <div class="foot">Obrigado pela preferência.<br/>Este documento não substitui NF-e.</div>
+  </div>
+</body>
+</html>`;
+}
+
+
+
+function imprimirCupomPDV(
+  snap: {
+    venda_id?: string;   // pode ficar, mas não vamos exibir
+    venda_numero?: number | null; // <-- novo
+    itens: { produto: { nome: string; preco_centavos: number }; quantidade: number }[];
+    subtotal: number;
+    desconto: number;
+    total: number;
+    pago: number;
+    troco: number;
+    membro_nome?: string;
+  },
+  orgNome: string,
+  metodo: string
+) {
+  const itens = snap.itens.map(i => ({
+    nome: i.produto.nome,
+    qtd: i.quantidade,
+    unit_cent: i.produto.preco_centavos,
+  }));
+
+  const html = gerarCupomHTMLPDV({
+    orgNome,
+    membro: snap.membro_nome ?? "Avulso",
+    vendaNumero: snap.venda_numero ?? null,  // <-- aqui!
+    metodo,
+    itens,
+    subtotal_cent: snap.subtotal,
+    desconto_cent: snap.desconto,
+    total_cent: snap.total,
+    pago_cent: snap.pago,
+    troco_cent: snap.troco,
+  });
+
+  abrirJanelaCupomPDV(html);
+}
+
+
+
+  /* ============ Upload de imagem ============ */
   async function uploadImagem(file: File, pathHint: string) {
     if (!orgId || !file) return null;
     const ext = file.name.split(".").pop() || "jpg";
@@ -552,7 +1070,7 @@ export default function PDVPage() {
     return pub?.publicUrl ?? null;
   }
 
-  /* ============ Cadastro de Produto (rápido) ============ */
+  /* ============ Cadastro de Produto ============ */
   const salvarProduto = async () => {
     if (!orgId || !terreiroId) {
       toast({ title: "Selecione um terreiro", variant: "destructive" });
@@ -565,45 +1083,68 @@ export default function PDVPage() {
     setSavingProduct(true);
     try {
       let imagem_url: string | null = null;
-      if (pArquivo) imagem_url = await uploadImagem(pArquivo, "novo");
+      if (pArquivo) imagem_url = await uploadImagem(pArquivo, editingProductId ? editingProductId : "novo");
 
       const preco = moneyStrToCents(pPreco);
-      const { data, error } = await supabase
-        .from("produtos")
-        .insert({
-          nome: pNome.trim(),
-          sku: pSku || null,
-          codigo_barras: pBarras || null,
-          unidade: pUnidade || "un",
-          preco_centavos: preco,
-          estoque_atual: Number.isFinite(pEstoque) ? pEstoque : 0,
-          categoria_id: pCategoria || null,
-          descricao: pDescricao || null,
-          imagem_url,
-          ativo: true,
-          org_id: orgId,
-          terreiro_id: terreiroId, // compat com back-end
-        })
-        .select("*")
-        .single();
 
-      if (error) throw error;
+      if (editingProductId) {
+        // UPDATE
+        const { data, error } = await supabase
+          .from("produtos")
+          .update({
+            nome: pNome.trim(),
+            sku: pSku || null,
+            codigo_barras: pBarras || null,
+            unidade: pUnidade || "un",
+            preco_centavos: preco,
+            estoque_atual: Number.isFinite(pEstoque) ? pEstoque : 0,
+            categoria_id: pCategoria || null,
+            descricao: pDescricao || null,
+            ...(imagem_url ? { imagem_url } : {}),
+          })
+          .eq("id", editingProductId)
+          .eq("org_id", orgId)
+          .select("*")
+          .single();
+        if (error) throw error;
 
-      setProdutos((prev) => [...prev, data as Produto].sort((a, b) => a.nome.localeCompare(b.nome)));
+        setProdutos((prev) =>
+          prev.map((x) => (x.id === editingProductId ? (data as Produto) : x)).sort((a, b) => a.nome.localeCompare(b.nome))
+        );
+        toast({ title: "Produto atualizado", description: data?.nome });
 
-      // limpa formulário
-      setPNome("");
-      setPSku("");
-      setPBarras("");
-      setPUnidade("un");
-      setPPreco("0,00");
-      setPEstoque(0);
-      setPCategoria(null);
-      setPDescricao("");
-      setPArquivo(null);
+      } else {
+        // INSERT
+        const { data, error } = await supabase
+          .from("produtos")
+          .insert({
+            nome: pNome.trim(),
+            sku: pSku || null,
+            codigo_barras: pBarras || null,
+            unidade: pUnidade || "un",
+            preco_centavos: preco,
+            estoque_atual: Number.isFinite(pEstoque) ? pEstoque : 0,
+            categoria_id: pCategoria || null,
+            descricao: pDescricao || null,
+            imagem_url,
+            ativo: true,
+            org_id: orgId,
+            terreiro_id: terreiroId,
+          })
+          .select("*")
+          .single();
+        if (error) throw error;
 
-      toast({ title: "Produto salvo", description: `${data?.nome}` });
+        setProdutos((prev) => [...prev, data as Produto].sort((a, b) => a.nome.localeCompare(b.nome)));
+        toast({ title: "Produto salvo", description: data?.nome });
+      }
+
+      // Limpa o formulário e sai do modo edição
+      setEditingProductId(null);
+      setPNome(""); setPSku(""); setPBarras(""); setPUnidade("un");
+      setPPreco("0,00"); setPEstoque(0); setPCategoria(null); setPDescricao(""); setPArquivo(null);
       setActiveTab("lista");
+
     } catch (e: any) {
       toast({ title: "Erro ao salvar produto", description: e?.message || String(e), variant: "destructive" });
     } finally {
@@ -611,7 +1152,8 @@ export default function PDVPage() {
     }
   };
 
-  /* ============ CRUD Categorias ============ */
+
+  /* ============ Categorias ============ */
   const openNewCategory = () => { setCatEditing(null); setCatNome(""); setCatModalOpen(true); };
   const openEditCategory = (c: Categoria) => { setCatEditing(c); setCatNome(c.nome); setCatModalOpen(true); };
 
@@ -653,20 +1195,46 @@ export default function PDVPage() {
     }
   };
 
-  /* ============ Editar / Excluir Produtos (Lista) ============ */
-  const openEditProduto = (p: Produto) => {
-    setEditing(p);
-    setEdNome(p.nome || "");
-    setEdSku(p.sku || "");
-    setEdBarras(p.codigo_barras || "");
-    setEdUnidade(p.unidade || "un");
-    setEdPreco((p.preco_centavos / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }));
-    setEdEstoque(p.estoque_atual || 0);
-    setEdCategoria(p.categoria_id || null);
-    setEdDescricao(p.descricao || "");
-    setEdArquivo(null);
-    setProdModalOpen(true);
+  const deleteProduto = async (id: string) => {
+    if (!orgId) return;
+    try {
+      const { error } = await supabase
+        .from("produtos")
+        .delete()
+        .eq("id", id)
+        .eq("org_id", orgId);
+      if (error) throw error;
+
+      setProdutos((prev) => prev.filter((p) => p.id !== id));
+      toast({ title: "Produto removido" });
+    } catch (e: any) {
+      toast({
+        title: "Erro ao remover produto",
+        description: e?.message || String(e),
+        variant: "destructive",
+      });
+    }
   };
+
+  /* ============ Edição Produto ============ */
+const openEditProduto = (p: Produto) => {
+  // Preenche o formulário de cadastro com os dados do produto
+  setEditingProductId(p.id);
+  setPNome(p.nome || "");
+  setPSku(p.sku || "");
+  setPBarras(p.codigo_barras || "");
+  setPUnidade(p.unidade || "un");
+  setPPreco((p.preco_centavos / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }));
+  setPEstoque(p.estoque_atual ?? 0);
+  setPCategoria(p.categoria_id || null);
+  setPDescricao(p.descricao || "");
+  setPArquivo(null);
+
+  // Vai para a aba Produtos
+  setActiveTab("produtos");
+};
+
+
 
   const saveEditProduto = async () => {
     if (!orgId || !editing) return;
@@ -705,21 +1273,184 @@ export default function PDVPage() {
     }
   };
 
-  const deleteProduto = async (id: string) => {
-    if (!orgId) return;
-    try {
-      await supabase.from("produtos").delete().eq("id", id).eq("org_id", orgId);
-      setProdutos((prev) => prev.filter((x) => x.id !== id));
-      toast({ title: "Produto removido" });
-    } catch (e: any) {
-      toast({ title: "Erro ao remover produto", description: e?.message || String(e), variant: "destructive" });
-    }
-  };
 
-  /* ============ UI: Vender (catálogo + carrinho) ============ */
+const handleExportProdutosXLSX = () => {
+  const rows = produtos.map((p) => ({
+    Nome: p.nome,
+    SKU: p.sku ?? "",
+    CodigoBarras: p.codigo_barras ?? "",
+    Unidade: p.unidade ?? "un",
+    "Preço (R$)": (p.preco_centavos ?? 0) / 100,
+    EstoqueAtual: p.estoque_atual ?? 0,
+    Categoria: categorias.find((c) => c.id === p.categoria_id)?.nome ?? "",
+    Descricao: p.descricao ?? "",
+    Ativo: p.ativo ? "Sim" : "Não",
+  }));
+
+  const headers = [
+    "Nome",
+    "SKU",
+    "CodigoBarras",
+    "Unidade",
+    "Preço (R$)",
+    "EstoqueAtual",
+    "Categoria",
+    "Descricao",
+    "Ativo",
+  ];
+
+  const ws = sheetWithHeaders(rows, [
+    "Nome", "SKU", "CodigoBarras", "Unidade", "Preço (R$)", 
+    "EstoqueAtual", "Categoria", "Descricao", "Ativo"
+  ]);
+  const range = safeRange(ws);
+
+  // ✅ Autofiltro no cabeçalho (uso correto de encode_range)
+  ws["!autofilter"] = { ref: XLSX.utils.encode_range(range) };
+
+  // (Opcional) Congelar linha 1 corretamente
+  (ws as any)["!pane"] = { state: "frozen", ySplit: 1, topLeftCell: "A2", activePane: "bottomLeft" };
+
+  // Larguras
+  ws["!cols"] = [
+    { wch: 28 }, // Nome
+    { wch: 14 }, // SKU
+    { wch: 16 }, // CodigoBarras
+    { wch: 8  }, // Unidade
+    { wch: 14 }, // Preço (R$)
+    { wch: 14 }, // EstoqueAtual
+    { wch: 18 }, // Categoria
+    { wch: 32 }, // Descricao
+    { wch: 10 }, // Ativo
+  ];
+
+  // Formato monetário na coluna "Preço (R$)" (c = 4)
+  // Começa em r=1 para pular o cabeçalho
+  for (let r = 1; r <= range.e.r; r++) {
+    const addr = XLSX.utils.encode_cell({ r, c: 4 });
+    const cell = ws[addr];
+    if (cell && typeof cell.v === "number") {
+      cell.t = "n";
+      cell.z = 'R$ #,##0.00';
+    }
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Produtos");
+
+  const nome = `produtos_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, nome);
+};
+
+
+
+const importInputRef = useRef<HTMLInputElement | null>(null);
+
+const handleOpenImport = () => {
+  importInputRef.current?.click();
+};
+
+// Converte "preco" em reais (ex.: "12,50") -> centavos
+const reaisToCentavos = (v: string) => {
+  if (!v) return 0;
+  const clean = v.replace(/\./g, "").replace(",", ".");
+  const n = Number.parseFloat(clean);
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+};
+
+const onImportXLSX = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  const data = await file.arrayBuffer();
+  const wb = XLSX.read(data, { type: "array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows: any[] = XLSX.utils.sheet_to_json(ws);
+
+  for (const r of rows) {
+    const nome = r["Nome"]?.toString().trim();
+    if (!nome) continue;
+
+    // Se vier "Preço (R$)" no template/export novo:
+    const precoReais = Number(r["Preço (R$)"]) || 0;
+    const preco_centavos = Math.round(precoReais * 100);
+
+    await supabase.from("produtos").upsert({
+      nome,
+      sku: r["SKU"] || null,
+      codigo_barras: r["CodigoBarras"] || null,
+      unidade: r["Unidade"] || "un",
+      preco_centavos,
+      estoque_atual: Number(r["EstoqueAtual"]) || 0,
+      descricao: r["Descricao"] || null,
+      ativo: String(r["Ativo"] ?? "Sim").toLowerCase().startsWith("s"),
+      org_id: orgId,
+      terreiro_id: orgId,
+      // Dica: se quiser mapear Categoria por nome -> categoria_id, faça um lookup nas suas categorias aqui
+    });
+  }
+
+  toast({ title: "Importação concluída", description: `${rows.length} produto(s) processados.` });
+};
+
+
+const handleDownloadTemplateXLSX = () => {
+  const exampleRows = [
+    {
+      Nome: "Vela palito branca",
+      SKU: "VELA-PAL-BR",
+      CodigoBarras: "7891234567890",
+      Unidade: "un",
+      "Preço (R$)": 3.50,          // mostramos em reais no template
+      EstoqueAtual: 100,
+      Categoria: "Velas",
+      Descricao: "Vela palito 20cm",
+      Ativo: "Sim",                // Sim/Não
+    },
+  ];
+
+  const ws = XLSX.utils.json_to_sheet(exampleRows, { origin: 0 });
+  const range = safeRange(ws);
+
+  ws["!autofilter"] = { ref: XLSX.utils.encode_range(range) };
+  (ws as any)["!pane"] = { state: "frozen", ySplit: 1, topLeftCell: "A2", activePane: "bottomLeft" };
+
+  ws["!cols"] = [
+    { wch: 28 }, { wch: 14 }, { wch: 16 }, { wch: 8  },
+    { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 32 }, { wch: 10 },
+  ];
+
+  // Formatar "Preço (R$)" (c = 4)
+  for (let r = 1; r <= range.e.r; r++) {
+    const addr = XLSX.utils.encode_cell({ r, c: 4 });
+    const cell = ws[addr];
+    if (cell && typeof cell.v === "number") {
+      cell.t = "n";
+      cell.z = 'R$ #,##0.00';
+    }
+  }
+
+  // Aba Dicionário
+  const wsDic = XLSX.utils.json_to_sheet([
+    { Campo: "Ativo", Opcoes: "Sim | Não" },
+    { Campo: "Unidade", Opcoes: "un | pct | cx | kg | lt" },
+    { Campo: "Observação", Opcoes: "Na importação, o 'Preço (R$)' será convertido para centavos." },
+  ]);
+  wsDic["!cols"] = [{ wch: 18 }, { wch: 60 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Produtos");
+  XLSX.utils.book_append_sheet(wb, wsDic, "Dicionário");
+
+  XLSX.writeFile(wb, "produtos_template.xlsx");
+};
+
+
+
+  /* ============ UI: Vender ============ */
   const venderTab = (
     <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
-      {/* Coluna de produtos/busca — AGORA 2 colunas no xl (menor) */}
+      {/* Busca / catálogo */}
       <div className="xl:col-span-2 space-y-4">
         <Card>
           <CardHeader className="py-3">
@@ -731,21 +1462,10 @@ export default function PDVPage() {
           <CardContent className="space-y-2">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-2">
               <div className="lg:col-span-2 flex items-center gap-2">
-                <Input
-                  placeholder="Nome, SKU ou código de barras"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="h-9"
-                />
+                <Input placeholder="Nome, SKU ou código de barras" value={search} onChange={(e) => setSearch(e.target.value)} className="h-9" />
               </div>
               <div className="flex items-center gap-2">
-                <Input
-                  placeholder="Leitor de código de barras"
-                  value={barcode}
-                  onChange={(e) => setBarcode(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") onBarcodeEnter(); }}
-                  className="h-9"
-                />
+                <Input placeholder="Leitor de código de barras" value={barcode} onChange={(e) => setBarcode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onBarcodeEnter(); }} className="h-9" />
                 <Button variant="secondary" onClick={onBarcodeEnter} title="Adicionar por código" className="h-9 px-3">
                   <Barcode className="h-4 w-4" />
                 </Button>
@@ -753,20 +1473,9 @@ export default function PDVPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Badge
-                onClick={() => setCat(null)}
-                className={`cursor-pointer ${cat === null ? "bg-primary text-primary-foreground" : ""}`}
-              >
-                Todas
-              </Badge>
+              <Badge onClick={() => setCat(null)} className={`cursor-pointer ${cat === null ? "bg-primary text-primary-foreground" : ""}`}>Todas</Badge>
               {categorias.map((c) => (
-                <Badge
-                  key={c.id}
-                  onClick={() => setCat(c.id)}
-                  className={`cursor-pointer ${cat === c.id ? "bg-primary text-primary-foreground" : ""}`}
-                >
-                  {c.nome}
-                </Badge>
+                <Badge key={c.id} onClick={() => setCat(c.id)} className={`cursor-pointer ${cat === c.id ? "bg-primary text-primary-foreground" : ""}`}>{c.nome}</Badge>
               ))}
             </div>
           </CardContent>
@@ -783,19 +1492,13 @@ export default function PDVPage() {
             <ScrollArea className="h-[42vh] md:h-[50vh] xl:h-[calc(100vh-25rem)] pr-2">
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                 {visibleProdutos.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => addToCart(p, 1)}
-                    className="group text-left border rounded-lg p-2 hover:shadow-md transition flex flex-col gap-2"
-                  >
+                  <button key={p.id} onClick={() => addToCart(p, 1)} className="group text-left border rounded-lg p-2 hover:shadow-md transition flex flex-col gap-2">
                     <div className="aspect-square w-full rounded-md bg-muted overflow-hidden">
                       {p.imagem_url ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={p.imagem_url} alt={p.nome} className="w-full h-full object-cover" />
                       ) : (
-                        <div className="w-full h-full grid place-items-center">
-                          <ImageIcon className="opacity-40" />
-                        </div>
+                        <div className="w-full h-full grid place-items-center"><ImageIcon className="opacity-40" /></div>
                       )}
                     </div>
                     <div className="text-[13px] font-medium line-clamp-2">{p.nome}</div>
@@ -803,17 +1506,17 @@ export default function PDVPage() {
                     <div className="mt-auto text-sm font-semibold">{fmt(p.preco_centavos)}</div>
                   </button>
                 ))}
-                {visibleProdutos.length === 0 && (
-                  <div className="col-span-full text-sm text-muted-foreground">Nenhum produto encontrado.</div>
-                )}
+                {visibleProdutos.length === 0 && <div className="col-span-full text-sm text-muted-foreground">Nenhum produto encontrado.</div>}
               </div>
             </ScrollArea>
           </CardContent>
         </Card>
       </div>
 
-      {/* Coluna do carrinho — AGORA 3 colunas no xl (maior) */}
+
       <div className="xl:col-span-3 space-y-4">
+
+{/* =================== CARRINHO =================== */}
         <Card className="sticky top-24 self-start">
           <CardHeader className="py-3">
             <CardTitle className="flex items-center gap-2 text-base">
@@ -821,26 +1524,98 @@ export default function PDVPage() {
               Carrinho
             </CardTitle>
           </CardHeader>
+
           <CardContent className="max-h-[calc(100vh-7rem)] overflow-auto">
-            {/* Cliente */}
-            <div className="mb-3">
-              <Label className="text-xs mb-1 block">Cliente</Label>
-              <Select
-                value={selectedMembro ?? "__avulso__"}
-                onValueChange={(v) => setSelectedMembro(v === "__avulso__" ? null : v)}
-              >
-                <SelectTrigger className="h-9">
-                  <SelectValue placeholder="Cliente avulso" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__avulso__">Cliente avulso</SelectItem>
-                  {membros.map((m) => (
-                    <SelectItem key={m.id} value={m.id}>{m.nome}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            {/* ===== Cliente ===== */}
+            <div className="mb-3 space-y-2">
+              <Label className="text-xs block">Cliente</Label>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant={clienteModo === "avulso" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setClienteModo("avulso"); setSelectedMembro(null); }}
+                >
+                  Avulso
+                </Button>
+
+                <Button
+                  type="button"
+                  variant={clienteModo === "membro" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setClienteModo("membro"); setClienteDialogOpen(true); }}
+                >
+                  Selecionar membro
+                </Button>
+
+                {selectedMembro && (
+                  <Badge variant="secondary" className="ml-1">
+                    {(() => {
+                      const m = membros.find(mm => mm.id === selectedMembro);
+                      return m ? `${m.nome}${m.matricula ? ` • ${m.matricula}` : ""}` : selectedMembro;
+                    })()}
+                  </Badge>
+                )}
+              </div>
+
+              {/* Dialog — busca por Nome ou Matrícula */}
+              <Dialog open={clienteDialogOpen} onOpenChange={setClienteDialogOpen}>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Selecionar membro</DialogTitle>
+                    <DialogDescription>Busque por nome ou matrícula.</DialogDescription>
+                  </DialogHeader>
+
+                  <div className="space-y-2">
+                    <Input
+                      autoFocus
+                      placeholder="Digite nome ou matrícula..."
+                      value={clienteQuery}
+                      onChange={(e) => setClienteQuery(e.target.value)}
+                      className="h-9"
+                    />
+
+                    <ScrollArea className="h-72 rounded-md border">
+                      <div className="p-2 space-y-1">
+                        {membrosFiltrados.map((m) => (
+                          <button
+                            key={m.id}
+                            onClick={() => {
+                              setSelectedMembro(m.id);
+                              setClienteModo("membro");
+                              setClienteDialogOpen(false);
+                            }}
+                            className="w-full text-left px-3 py-2 rounded-md hover:bg-muted"
+                          >
+                            <div className="text-sm font-medium">{m.nome}</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {m.matricula ? `Matrícula: ${m.matricula}` : "—"}
+                            </div>
+                          </button>
+                        ))}
+                        {membrosFiltrados.length === 0 && (
+                          <div className="text-sm text-muted-foreground px-3 py-6 text-center">
+                            Nenhum membro encontrado
+                          </div>
+                        )}
+                      </div>
+                    </ScrollArea>
+
+                    <div className="flex justify-end gap-2 pt-1">
+                      <Button variant="secondary" onClick={() => setClienteDialogOpen(false)}>Fechar</Button>
+                      {selectedMembro && (
+                        <Button variant="outline" onClick={() => { setSelectedMembro(null); setClienteModo("avulso"); }}>
+                          Limpar seleção
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </div>
 
+            {/* ===== Tabela de itens ===== */}
             <div className="rounded-md border overflow-hidden">
               <Table>
                 <TableHeader>
@@ -857,7 +1632,9 @@ export default function PDVPage() {
                     <TableRow key={ci.produto.id}>
                       <TableCell>
                         <div className="text-sm font-medium">{ci.produto.nome}</div>
-                        <div className="text-xs text-muted-foreground">{ci.produto.sku || ci.produto.codigo_barras}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {ci.produto.sku || ci.produto.codigo_barras}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Input
@@ -879,41 +1656,111 @@ export default function PDVPage() {
                   ))}
                   {cart.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-sm text-muted-foreground text-center">Carrinho vazio</TableCell>
+                      <TableCell colSpan={5} className="text-sm text-muted-foreground text-center">
+                        Carrinho vazio
+                      </TableCell>
                     </TableRow>
                   )}
                 </TableBody>
               </Table>
             </div>
 
+            {/* ===== Desconto (segmented) ===== */}
             <div className="mt-4 space-y-3">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
                   <Label className="flex items-center gap-2">
-                    <Percent className="h-4 w-4" /> Desconto (R$)
+                    <Percent className="h-4 w-4" />
+                    Desconto
                   </Label>
-                  <Input value={descontoReais} onChange={(e) => setDescontoReais(e.target.value)} placeholder="0,00" className="h-9" />
+
+                  <div className="inline-flex rounded-md border overflow-hidden">
+                    <button
+                      type="button"
+                      className={`px-3 py-1 text-sm ${descontoModo === "valor" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                      onClick={() => setDescontoModo("valor")}
+                    >
+                      R$
+                    </button>
+                    <button
+                      type="button"
+                      className={`px-3 py-1 text-sm border-l ${descontoModo === "percent" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                      onClick={() => setDescontoModo("percent")}
+                    >
+                      %
+                    </button>
+                  </div>
                 </div>
-                <div>
-                  <Label>%</Label>
-                  <Input value={descontoPercent} onChange={(e) => setDescontoPercent(e.target.value)} placeholder="0" className="h-9" />
-                </div>
+
+                {descontoModo === "valor" ? (
+                  <Input
+                    value={descontoReais}
+                    onChange={(e) => setDescontoReais(e.target.value)}
+                    placeholder="0,00"
+                    className="h-9"
+                  />
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={descontoPercent}
+                      onChange={(e) => setDescontoPercent(e.target.value)}
+                      placeholder="0"
+                      className="h-9"
+                    />
+                    <span className="text-sm text-muted-foreground">% (máx. 100)</span>
+                  </div>
+                )}
+
+                {descontoModo === "percent" && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {[5, 10, 15].map((p) => (
+                      <Button
+                        key={p}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setDescontoPercent(String(p))}
+                      >
+                        -{p}%
+                      </Button>
+                    ))}
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setDescontoPercent("0")}>
+                      Zerar
+                    </Button>
+                  </div>
+                )}
               </div>
 
               <Separator />
 
+              {/* ===== Resumo ===== */}
               <div className="space-y-1 text-sm">
-                <div className="flex justify-between"><span>Subtotal</span><span>{fmt(subtotal)}</span></div>
-                <div className="flex justify-between"><span>Descontos</span><span>- {fmt(descontoManualCentavos)}</span></div>
-                <div className="flex justify-between font-semibold text-base"><span>Total</span><span>{fmt(total)}</span></div>
+                <div className="flex justify-between">
+                  <span>Subtotal</span>
+                  <span>{fmt(subtotal)}</span>
+                </div>
+                {descontoManualCentavos > 0 && (
+                  <div className="flex justify-between">
+                    <span>Descontos</span>
+                    <span className="text-destructive">- {fmt(descontoManualCentavos)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-semibold text-base">
+                  <span>Total</span>
+                  <span>{fmt(total)}</span>
+                </div>
               </div>
 
               <Separator />
 
+              {/* ===== Pagamento ===== */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>Método</Label>
-                  <Select value={metodoPagamento} onValueChange={(v: "PIX" | "Cartão" | "Dinheiro") => setMetodoPagamento(v)}>
+                  <Select value={metodoPagamento} onValueChange={(v) => setMetodoPagamento(v as any)}>
                     <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="PIX">PIX</SelectItem>
@@ -924,7 +1771,12 @@ export default function PDVPage() {
                 </div>
                 <div>
                   <Label>Pago (R$)</Label>
-                  <Input value={pagoReais} onChange={(e) => setPagoReais(e.target.value)} placeholder="0,00" className="h-9" />
+                  <Input
+                    value={pagoReais}
+                    onChange={(e) => setPagoReais(e.target.value)}
+                    placeholder="0,00"
+                    className="h-9"
+                  />
                 </div>
               </div>
 
@@ -933,39 +1785,42 @@ export default function PDVPage() {
                 <span className="font-medium">{fmt(troco)}</span>
               </div>
 
-              {/* Botões proporcionais e responsivos */}
+              {/* ===== Ações ===== */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2">
                 <Button className="w-full" onClick={() => finishSale(true)} disabled={isFinishing || cart.length === 0}>
-                  <CreditCard className="h-4 w-4 mr-2" /> Finalizar e imprimir
+                  <Printer className="h-4 w-4 mr-2" /> Finalizar e imprimir
                 </Button>
                 <Button className="w-full" variant="secondary" onClick={() => finishSale(false)} disabled={isFinishing || cart.length === 0}>
-                  <Printer className="h-4 w-4 mr-2" /> Só finalizar
+                  <CreditCard className="h-4 w-4 mr-2" /> Só finalizar
                 </Button>
-                <Button className="w-full" variant="outline" onClick={clearCart} disabled={cart.length === 0}>Limpar</Button>
+                <Button className="w-full" variant="outline" onClick={clearCart} disabled={cart.length === 0}>
+                  Limpar
+                </Button>
               </div>
             </div>
           </CardContent>
         </Card>
+
       </div>
     </div>
   );
 
-  /* ============ UI: Cadastro rápido de produto ============ */
+  /* ============ Produtos / Categorias / Lista ============ */
   const produtosTab = (
     <div className="max-w-4xl">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-3">
-            <PlusCircle className="h-5 w-5" />
-            Cadastro de produto
+          <CardTitle className="flex items-center gap-2">
+            <Package className="h-5 w-5" />
+            PDV
           </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Ponto de venda e histórico de vendas
+          </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label>Nome *</Label>
-              <Input value={pNome} onChange={(e) => setPNome(e.target.value)} placeholder="Ex.: Vela palito" />
-            </div>
+            <div><Label>Nome *</Label><Input value={pNome} onChange={(e) => setPNome(e.target.value)} placeholder="Ex.: Vela palito" /></div>
             <div>
               <Label>Categoria</Label>
               <div className="flex gap-2">
@@ -976,54 +1831,29 @@ export default function PDVPage() {
                     {categorias.map((c) => <SelectItem key={c.id} value={c.id}>{c.nome}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <Button type="button" variant="outline" onClick={() => setActiveTab("categorias")}>
-                  <FolderOpen className="h-4 w-4 mr-2" /> Categorias
-                </Button>
+                <Button type="button" variant="outline" onClick={() => setActiveTab("categorias")}><FolderOpen className="h-4 w-4 mr-2" />Categorias</Button>
               </div>
             </div>
-            <div>
-              <Label>SKU</Label>
-              <Input value={pSku} onChange={(e) => setPSku(e.target.value)} placeholder="Opcional" />
-            </div>
-            <div>
-              <Label>Código de barras</Label>
-              <Input value={pBarras} onChange={(e) => setPBarras(e.target.value)} placeholder="EAN/GTIN" />
-            </div>
+            <div><Label>SKU</Label><Input value={pSku} onChange={(e) => setPSku(e.target.value)} placeholder="Opcional" /></div>
+            <div><Label>Código de barras</Label><Input value={pBarras} onChange={(e) => setPBarras(e.target.value)} placeholder="EAN/GTIN" /></div>
             <div>
               <Label>Unidade</Label>
               <Select value={pUnidade} onValueChange={setPUnidade}>
                 <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="un">un</SelectItem>
-                  <SelectItem value="pct">pct</SelectItem>
-                  <SelectItem value="cx">cx</SelectItem>
-                  <SelectItem value="kg">kg</SelectItem>
-                  <SelectItem value="lt">lt</SelectItem>
+                  <SelectItem value="un">un</SelectItem><SelectItem value="pct">pct</SelectItem>
+                  <SelectItem value="cx">cx</SelectItem><SelectItem value="kg">kg</SelectItem><SelectItem value="lt">lt</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label>Preço (R$)</Label>
-              <Input value={pPreco} onChange={(e) => setPPreco(e.target.value)} placeholder="0,00" />
-            </div>
-            <div>
-              <Label>Estoque inicial</Label>
-              <Input type="number" value={pEstoque} onChange={(e) => setPEstoque(intFromInput(e.target.value))} />
-            </div>
-            <div>
-              <Label>Foto</Label>
-              <Input type="file" accept="image/*" onChange={(e) => setPArquivo(e.target.files?.[0] ?? null)} />
-            </div>
-            <div className="md:col-span-2">
-              <Label>Descrição</Label>
-              <Textarea value={pDescricao} onChange={(e) => setPDescricao(e.target.value)} rows={3} />
-            </div>
+            <div><Label>Preço (R$)</Label><Input value={pPreco} onChange={(e) => setPPreco(e.target.value)} placeholder="0,00" /></div>
+            <div><Label>Estoque inicial</Label><Input type="number" value={pEstoque} onChange={(e) => setPEstoque(intFromInput(e.target.value))} /></div>
+            <div><Label>Foto</Label><Input type="file" accept="image/*" onChange={(e) => setPArquivo(e.target.files?.[0] ?? null)} /></div>
+            <div className="md:col-span-2"><Label>Descrição</Label><Textarea value={pDescricao} onChange={(e) => setPDescricao(e.target.value)} rows={3} /></div>
           </div>
 
           <div className="flex gap-2">
-            <Button onClick={salvarProduto} disabled={savingProduct}>
-              <Save className="h-4 w-4 mr-2" /> Salvar
-            </Button>
+            <Button onClick={salvarProduto} disabled={savingProduct}><Save className="h-4 w-4 mr-2" />Salvar</Button>
             <Button
               type="button"
               variant="secondary"
@@ -1040,7 +1870,6 @@ export default function PDVPage() {
     </div>
   );
 
-  /* ============ UI: Categorias ============ */
   const categoriasTab = (
     <div className="max-w-3xl">
       <div className="flex items-center justify-between mb-3">
@@ -1050,45 +1879,29 @@ export default function PDVPage() {
       <Card>
         <CardContent className="p-0">
           <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Nome</TableHead>
-                <TableHead className="w-36 text-right">Ações</TableHead>
-              </TableRow>
-            </TableHeader>
+            <TableHeader><TableRow><TableHead>Nome</TableHead><TableHead className="w-36 text-right">Ações</TableHead></TableRow></TableHeader>
             <TableBody>
               {categorias.map((c) => (
                 <TableRow key={c.id}>
                   <TableCell>{c.nome}</TableCell>
                   <TableCell className="text-right">
-                    <Button size="sm" variant="ghost" onClick={() => openEditCategory(c)}>
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => deleteCategory(c.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => openEditCategory(c)}><Pencil className="h-4 w-4" /></Button>
+                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => deleteCategory(c.id)}><Trash2 className="h-4 w-4" /></Button>
                   </TableCell>
                 </TableRow>
               ))}
-              {categorias.length === 0 && (
-                <TableRow><TableCell colSpan={2} className="text-sm text-muted-foreground text-center">Nenhuma categoria</TableCell></TableRow>
-              )}
+              {categorias.length === 0 && <TableRow><TableCell colSpan={2} className="text-sm text-muted-foreground text-center">Nenhuma categoria</TableCell></TableRow>}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
 
-      {/* Modal categoria */}
       <Dialog open={catModalOpen} onOpenChange={setCatModalOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{catEditing ? "Editar categoria" : "Nova categoria"}</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>{catEditing ? "Editar categoria" : "Nova categoria"}</DialogTitle></DialogHeader>
+          <DialogDescription>Preencha o nome e clique em salvar.</DialogDescription>
           <div className="space-y-3">
-            <div>
-              <Label>Nome</Label>
-              <Input value={catNome} onChange={(e) => setCatNome(e.target.value)} />
-            </div>
+            <div><Label>Nome</Label><Input value={catNome} onChange={(e) => setCatNome(e.target.value)} /></div>
             <div className="flex gap-2 justify-end">
               <Button variant="secondary" onClick={() => setCatModalOpen(false)}><X className="h-4 w-4 mr-1" /> Cancelar</Button>
               <Button onClick={saveCategory}><Save className="h-4 w-4 mr-1" /> Salvar</Button>
@@ -1099,13 +1912,14 @@ export default function PDVPage() {
     </div>
   );
 
-  /* ============ UI: Lista de produtos ============ */
   const [listQuery, setListQuery] = useState("");
   const produtosFiltrados = useMemo(() => {
     const q = listQuery.trim().toLowerCase();
     if (!q) return produtos;
     return produtos.filter((p) =>
-      [p.nome, p.sku, p.codigo_barras].filter(Boolean).some((s) => (s || "").toLowerCase().includes(q))
+      [p.nome, p.sku, p.codigo_barras]
+        .filter(Boolean)
+        .some((s) => (s || "").toLowerCase().includes(q))
     );
   }, [produtos, listQuery]);
 
@@ -1113,11 +1927,54 @@ export default function PDVPage() {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-xl font-semibold">Produtos</h3>
+
         <div className="flex gap-2">
-          <Input className="w-64" placeholder="Buscar por nome, SKU, código..." value={listQuery} onChange={(e) => setListQuery(e.target.value)} />
-          <Button variant="outline" onClick={() => setActiveTab("produtos")}><PlusCircle className="h-4 w-4 mr-2" /> Novo</Button>
+          <Input
+            className="w-64"
+            placeholder="Buscar por nome, SKU, código..."
+            value={listQuery}
+            onChange={(e) => setListQuery(e.target.value)}
+          />
+
+          {/* EXPORTAR CSV */}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleExportProdutosXLSX}
+            title="Exportar XLSX"
+          >
+            <Download className="h-4 w-4 mr-2" /> Exportar
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleDownloadTemplateXLSX}
+            title="Baixar template XLSX"
+          >
+            <Download className="h-4 w-4 mr-2" /> Template
+          </Button>
+
+
+          {/* IMPORTAR CSV (input oculto + botão) */}
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            className="hidden"
+            onChange={onImportXLSX}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleOpenImport}
+            title="Importar XLSX"
+          >
+            <Upload className="h-4 w-4 mr-2" /> Importar
+          </Button>
         </div>
       </div>
+
       <Card>
         <CardContent className="p-0">
           <Table>
@@ -1136,14 +1993,17 @@ export default function PDVPage() {
                   <TableCell>
                     <div className="w-12 h-12 rounded-md bg-muted overflow-hidden grid place-items-center">
                       {p.imagem_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={p.imagem_url} alt={p.nome} className="w-full h-full object-cover" />
-                      ) : <ImageIcon className="h-5 w-5 opacity-40" />}
+                      ) : (
+                        <ImageIcon className="h-5 w-5 opacity-40" />
+                      )}
                     </div>
                   </TableCell>
                   <TableCell>
                     <div className="font-medium">{p.nome}</div>
-                    <div className="text-[11px] text-muted-foreground">{p.sku || p.codigo_barras || p.unidade}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {p.sku || p.codigo_barras || p.unidade}
+                    </div>
                   </TableCell>
                   <TableCell>{fmt(p.preco_centavos)}</TableCell>
                   <TableCell>{p.estoque_atual ?? 0}</TableCell>
@@ -1151,106 +2011,148 @@ export default function PDVPage() {
                     <Button size="sm" variant="ghost" onClick={() => openEditProduto(p)}>
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => deleteProduto(p.id)}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive"
+                      onClick={() => deleteProduto(p.id)}
+                    >
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </TableCell>
                 </TableRow>
               ))}
               {produtosFiltrados.length === 0 && (
-                <TableRow><TableCell colSpan={5} className="text-sm text-muted-foreground text-center">Sem produtos</TableCell></TableRow>
+                <TableRow>
+                  <TableCell colSpan={5} className="text-sm text-muted-foreground text-center">
+                    Sem produtos
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+
+  /* ============ Histórico ============ */
+  const membrosById = useMemo(() => {
+    const map = new Map<string, string>();
+    membros.forEach((m) => map.set(m.id, m.nome));
+    return map;
+  }, [membros]);
+
+  const historicoFiltrado = useMemo(() => {
+    const q = historicoSearch.trim().toLowerCase();
+    if (!q) return historico;
+    return historico.filter((v) => {
+      const nome = v.membro_id ? (membrosById.get(v.membro_id) || "") : "avulso";
+      const numStr = (v.numero != null ? String(v.numero) : "");
+      return (
+        nome.toLowerCase().includes(q) ||
+        (v.metodo_pagamento || "").toLowerCase().includes(q) ||
+        numStr.includes(q) // <-- busca por número
+      );
+    });
+  }, [historico, historicoSearch, membrosById]);
+
+  const historicoTab = (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <History className="h-5 w-5" />
+        <h3 className="text-xl font-semibold">Histórico de vendas</h3>
+        <div className="ml-auto flex gap-2">
+          <Input
+            className="w-64"
+            placeholder="Buscar por cliente, método ou nº"
+            value={historicoSearch}
+            onChange={(e) => setHistoricoSearch(e.target.value)}
+          />
+          <Button variant="outline" onClick={() => orgId && loadHistorico(orgId)} disabled={loadingHistorico}>
+            <RefreshCcw className="h-4 w-4 mr-2" /> Recarregar
+          </Button>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-40">Data</TableHead>
+                <TableHead className="w-40">Venda ID</TableHead>
+                <TableHead>Cliente / Itens</TableHead>
+                <TableHead className="w-40">Método</TableHead>
+                <TableHead className="w-32 text-right">Total</TableHead>                
+                <TableHead className="w-36 text-right">Ações</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {historicoFiltrado.map((v) => (
+                <TableRow key={v.id}>
+                  <TableCell>{new Date(v.created_at).toLocaleString("pt-BR")}</TableCell>
+                  <TableCell>{v.numero ?? v.id}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-col">
+                      <span>{v.membro_id ? (membrosById.get(v.membro_id) || v.membro_id) : "Avulso"}</span>
+                      {!!v.itens?.length && (
+                        <span className="text-xs text-muted-foreground mt-1">
+                          {v.itens.slice(0, 3).map(i => `${i.quantidade}x ${i.produto_nome ?? "Produto"}`).join(", ")}
+                          {v.itens.length > 3 ? ` e +${v.itens.length - 3}` : ""}
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>{v.metodo_pagamento || "-"}</TableCell>
+                  <TableCell className="text-right">{fmt(v.total_centavos || 0)}</TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="outline" size="sm" className="text-destructive border-destructive" onClick={() => openRefundDialog(v.id)}>
+                      Reembolsar
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {(!historicoFiltrado || historicoFiltrado.length === 0) && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-sm text-muted-foreground text-center">
+                    {loadingHistorico ? "Carregando vendas…" : "Nenhuma venda encontrada para os filtros."}
+                  </TableCell>
+                </TableRow>
               )}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
 
-      {/* Modal produto (editar) */}
-      <Dialog open={prodModalOpen} onOpenChange={setProdModalOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Editar produto</DialogTitle>
-          </DialogHeader>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label>Nome *</Label>
-              <Input value={edNome} onChange={(e) => setEdNome(e.target.value)} />
-            </div>
-            <div>
-              <Label>Categoria</Label>
-              <Select value={edCategoria ?? "__semcat__"} onValueChange={(v) => setEdCategoria(v === "__semcat__" ? null : v)}>
-                <SelectTrigger className="h-9"><SelectValue placeholder="Selecione..." /></SelectTrigger>
-                <SelectContent>
-                  {categorias.map((c) => <SelectItem key={c.id} value={c.id}>{c.nome}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>SKU</Label>
-              <Input value={edSku} onChange={(e) => setEdSku(e.target.value)} />
-            </div>
-            <div>
-              <Label>Código de barras</Label>
-              <Input value={edBarras} onChange={(e) => setEdBarras(e.target.value)} />
-            </div>
-            <div>
-              <Label>Unidade</Label>
-              <Select value={edUnidade} onValueChange={setEdUnidade}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="un">un</SelectItem>
-                  <SelectItem value="pct">pct</SelectItem>
-                  <SelectItem value="cx">cx</SelectItem>
-                  <SelectItem value="kg">kg</SelectItem>
-                  <SelectItem value="lt">lt</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Preço (R$)</Label>
-              <Input value={edPreco} onChange={(e) => setEdPreco(e.target.value)} />
-            </div>
-            <div>
-              <Label>Estoque</Label>
-              <Input type="number" value={edEstoque} onChange={(e) => setEdEstoque(intFromInput(e.target.value))} />
-            </div>
-            <div>
-              <Label>Foto</Label>
-              <Input type="file" accept="image/*" onChange={(e) => setEdArquivo(e.target.files?.[0] ?? null)} />
-            </div>
-            <div className="md:col-span-2">
-              <Label>Descrição</Label>
-              <Textarea rows={3} value={edDescricao} onChange={(e) => setEdDescricao(e.target.value)} />
-            </div>
-          </div>
-          <div className="flex gap-2 justify-end pt-2">
-            <Button variant="secondary" onClick={() => setProdModalOpen(false)}><X className="h-4 w-4 mr-1" /> Cancelar</Button>
-            <Button onClick={saveEditProduto}><Save className="h-4 w-4 mr-1" /> Salvar</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {historicoTable && <div className="text-xs text-muted-foreground">Fonte: {historicoTable} (100 mais recentes)</div>}
     </div>
   );
 
   /* ============ Shell da página ============ */
   const content = (
-    <div className="mx-auto max-w-[1400px] p-4 md:p-6 space-y-6">
-      <div className="flex items-center gap-3">
-        <Package className="h-6 w-6" />
-        <h1 className="text-2xl font-semibold">PDV</h1>
-        {orgName && <Badge variant="secondary" className="ml-2">{orgName}</Badge>}
+    <div className="mx-auto max-w-[1400px] px-4 md:px-6 pt-2 md:pt-4 space-y-4 relative z-0">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
+            <Package className="h-8 w-8 text-primary" />
+            PDV
+          </h1>
+          <p className="text-muted-foreground">
+            Ponto de venda e histórico de vendas
+          </p>
+          {orgName && (
+            <Badge variant="secondary" className="mt-2">
+              {orgName}
+            </Badge>
+          )}
+        </div>
       </div>
 
       {!orgId ? (
         <Card>
-          <CardHeader>
-            <CardTitle>{loadingOrg ? "aCarregando organização..." : "Organização não encontrada"}</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            {loadingOrg
-              ? "Buscando sua organização padrão no perfil."
-              : "Não foi possível detectar automaticamente sua organização."}
-          </CardContent>
+          <CardHeader><CardTitle>{loadingOrg ? "Carregando organização..." : "Organização não encontrada"}</CardTitle></CardHeader>
         </Card>
       ) : (
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
@@ -1259,26 +2161,31 @@ export default function PDVPage() {
             <TabsTrigger value="produtos">Produtos</TabsTrigger>
             <TabsTrigger value="categorias">Categorias</TabsTrigger>
             <TabsTrigger value="lista">Lista</TabsTrigger>
+            <TabsTrigger value="historico">Histórico</TabsTrigger>
           </TabsList>
 
           <TabsContent value="vender">{venderTab}</TabsContent>
           <TabsContent value="produtos">{produtosTab}</TabsContent>
           <TabsContent value="categorias">{categoriasTab}</TabsContent>
           <TabsContent value="lista">{listaTab}</TabsContent>
+          <TabsContent value="historico">{historicoTab}</TabsContent>
         </Tabs>
       )}
 
       {/* Recibo */}
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Recibo</DialogTitle></DialogHeader>
-          <div ref={receiptRef} className="text-sm space-y-1">
+          <DialogHeader>
+            <DialogTitle>Recibo</DialogTitle>
+            <DialogDescription>Comprovante simples da venda realizada no PDV.</DialogDescription>
+          </DialogHeader>
+          <div id="receipt-print" ref={receiptRef} className="text-sm space-y-1">
             <div>Organização: {orgName || orgId}</div>
             <div>
               Cliente: { lastSale?.membro_nome ||
                 (selectedMembro ? (membros.find(m => m.id === selectedMembro)?.nome || selectedMembro) : "Avulso") }
             </div>
-            {lastSale?.venda_id && <div>Venda: #{lastSale.venda_id}</div>}
+            {lastSale?.venda_numero && <div>Venda: #{lastSale.venda_numero}</div>}
             <Separator className="my-2" />
             {(lastSale?.itens || cart).map(ci => (
               <div key={ci.produto.id} className="flex justify-between">
@@ -1287,23 +2194,65 @@ export default function PDVPage() {
               </div>
             ))}
             <Separator className="my-2" />
-            <div className="flex justify-between"><span>Total</span><span>{fmt(lastSale?.total ?? total)}</span></div>
-            <div className="flex justify-between"><span>Pago</span><span>{fmt(lastSale?.pago ?? pagoCentavos)}</span></div>
-            <div className="flex justify-between"><span>Troco</span><span>{fmt(lastSale?.troco ?? troco)}</span></div>
+            <div className="flex justify-between"><span>Total</span><span>{fmt(lastSale?.total ?? 0)}</span></div>
+            <div className="flex justify-between"><span>Pago</span><span>{fmt(lastSale?.pago ?? 0)}</span></div>
+            <div className="flex justify-between"><span>Troco</span><span>{fmt(lastSale?.troco ?? 0)}</span></div>
             <div className="pt-2 text-muted-foreground">Obrigado pela preferência!</div>
           </div>
           <div className="flex gap-2 pt-2">
-            <Button onClick={() => window.print()}><Printer className="h-4 w-4 mr-2" /> Imprimir</Button>
+            <Button
+              onClick={() => {
+                if (!lastSale) return;
+                imprimirCupomPDV(
+                  {
+                    venda_id: lastSale.venda_id,
+                    venda_numero: lastSale.venda_numero, // <<-- use lastSale
+                    itens: lastSale.itens,
+                    subtotal: lastSale.subtotal,
+                    desconto: lastSale.desconto,
+                    total: lastSale.total,
+                    pago: lastSale.pago,
+                    troco: lastSale.troco,
+                    membro_nome: lastSale.membro_nome,
+                  },
+                  orgName || String(orgId),
+                  metodoPagamento
+                );
+              }}
+            >
+              <Printer className="h-4 w-4 mr-2" /> Imprimir
+            </Button>
+
             <Button variant="secondary" onClick={() => setShowReceipt(false)}>Fechar</Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Confirmação de reembolso */}
+      <AlertDialog open={confirmRefundOpen} onOpenChange={setConfirmRefundOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar reembolso</AlertDialogTitle>
+            <AlertDialogDescription>
+              Isso vai cancelar a venda <b>#{refundTarget?.id}</b> e reverter o estoque dos itens. Essa ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={actuallyRefund}>
+              Confirmar reembolso
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 
   return (
     <DashboardLayout>
+      <FeatureGate code="pdv" fallback={<UpgradeCard needed="PDV" />}>      
       <NiceErrorBoundary>{content}</NiceErrorBoundary>
+      </FeatureGate>
     </DashboardLayout>
   );
 }

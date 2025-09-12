@@ -8,8 +8,39 @@ import { Wallet } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import type { ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import FeatureGate from "@/components/FeatureGate";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface DashboardLayoutProps { children: ReactNode }
+
+/** Cartão simples mostrado quando a feature não faz parte do plano do terreiro */
+function NoAccessCard({ needed }: { needed: string }) {
+  return (
+    <Card className="my-6">
+      <CardHeader><CardTitle>Recurso indisponível</CardTitle></CardHeader>
+      <CardContent className="space-y-2">
+        <p>O seu plano atual não permite acessar <b>{needed}</b>.</p>
+        <Button asChild variant="outline">
+          <Link to="/configuracoes?tab=plano">Ver planos</Link>
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Mapeia pathname -> feature code do plano */
+function featureFromPath(pathname: string): string | null {
+  if (pathname.startsWith("/superadmin")) return null;           // superadmin sem gate
+  if (pathname.startsWith("/membros")) return "membros";
+  if (pathname.startsWith("/planos")) return "planos";
+  if (pathname.startsWith("/assinaturas")) return "assinaturas";
+  if (pathname.startsWith("/mensalidades")) return "mensalidades";
+  if (pathname.startsWith("/faturas")) return "faturas";
+  if (pathname.startsWith("/pagamentos-diversos")) return "pagamentos_diversos";
+  if (pathname.startsWith("/relatorios")) return "relatorios";
+  if (pathname.startsWith("/usuarios")) return "usuarios";
+  return null; // páginas livres (dashboard inicial, onboarding etc.)
+}
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const { pathname } = useLocation();
@@ -28,6 +59,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   // Superadmin allowlist (apenas você)
   const isSuperadmin = (user?.email || "").toLowerCase() === "brunopdlaj@gmail.com";
 
+  // Qual feature este path exige? (null = sem gate)
+  const neededFeature = featureFromPath(pathname);
+
   return (
     <ProtectedRoute>
       <SidebarProvider>
@@ -35,12 +69,10 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
         <SidebarInset className="min-h-screen bg-background">
           {/* HEADER */}
-          <header className="sticky top-1 z-70 h-17 border-b border-border bg-card/60 backdrop-blur supports-[backdrop-filter]:bg-card/50">
-            {/* mesmo container do main, garantindo alinhamento */}
+          <header className="sticky top-1 z-40 h-17 border-b border-border bg-card/60 backdrop-blur supports-[backdrop-filter]:bg-card/50">
             <div className="mx-auto w-full max-w-7xl">
               <div className="h-16 flex items-center gap-3 px-4 md:px-6">
                 <SidebarTrigger className="h-8 w-8 rounded-md border hover:bg-muted" />
-                {/* separa o ícone da “linha” do sidebar */}
                 <Separator orientation="vertical" className="h-6" />
                 <div className="flex-1 min-w-0">
                   <h1 className="text-lg font-semibold leading-none truncate">Terreiro Gestor</h1>
@@ -56,22 +88,36 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                   </Button>
                 )}
 
-                <Button
-                  asChild
-                  className="gap-2 bg-gradient-to-br from-primary via-violet-600 to-pink-600 text-white hover:opacity-90"
-                >
-                  <Link to="/mensalidades" title="Ir para Mensalidades">
-                    <Wallet className="h-4 w-4" />
-                    <span className="hidden sm:inline">Mensalidades</span>
-                  </Link>
-                </Button>
+                {/* Botão rápido de Mensalidades só se o plano do terreiro permitir */}
+                <FeatureGate code="mensalidades">
+                  <Button
+                    asChild
+                    className="gap-2 bg-gradient-to-br from-primary via-violet-600 to-pink-600 text-white hover:opacity-90"
+                  >
+                    <Link to="/mensalidades" title="Ir para Mensalidades">
+                      <Wallet className="h-4 w-4" />
+                      <span className="hidden sm:inline">Mensalidades</span>
+                    </Link>
+                  </Button>
+                </FeatureGate>
               </div>
             </div>
           </header>
 
           {/* MAIN */}
           <main className="flex-1 bg-gradient-to-br from-background to-muted/20">
-            <div className="mx-auto w-full max-w-7xl px-6 py-6">{children}</div>
+            <div className="mx-auto w-full max-w-7xl px-6 py-6">
+              {neededFeature ? (
+                <FeatureGate
+                  code={neededFeature}
+                  fallback={<NoAccessCard needed={sectionTitle || neededFeature} />}
+                >
+                  {children}
+                </FeatureGate>
+              ) : (
+                children
+              )}
+            </div>
           </main>
         </SidebarInset>
       </SidebarProvider>

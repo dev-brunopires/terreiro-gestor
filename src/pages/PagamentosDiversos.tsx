@@ -14,7 +14,8 @@ import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { Plus, Search, Trash2, HandCoins, Receipt, FileText, Pencil } from 'lucide-react';
-
+import FeatureGate from "@/components/FeatureGate";
+import UpgradeCard from "@/components/UpgradeCard";
 interface Membro { id: string; nome: string; matricula: string | null }
 interface PagDiverso {
   id: string; tipo: string; descricao: string | null; valor_centavos: number;
@@ -711,306 +712,308 @@ export default function PagamentosDiversos() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
-              <HandCoins className="h-8 w-8 text-primary" />
-              Pagamentos Diversos
-            </h1>
-            <p className="text-muted-foreground">
-              {isViewer
-                ? 'Você pode lançar seus pagamentos apenas via PIX.'
-                : <>Lance doações e compras avulsas do terreiro {orgNome ? `— ${orgNome}` : ''}</>}
-            </p>
+      <FeatureGate code="pagamentos_diversos" fallback={<UpgradeCard needed="Pagamentos diversos" />}>
+        <div className="space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
+                <HandCoins className="h-8 w-8 text-primary" />
+                Pagamentos Diversos
+              </h1>
+              <p className="text-muted-foreground">
+                {isViewer
+                  ? 'Você pode lançar seus pagamentos apenas via PIX.'
+                  : <>Lance doações e compras avulsas do terreiro {orgNome ? `— ${orgNome}` : ''}</>}
+              </p>
+            </div>
           </div>
-        </div>
 
-        {/* Form */}
-        <Card className="bg-card/50 backdrop-blur-sm">
-          <CardHeader><CardTitle>Novo lançamento</CardTitle></CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Tipo */}
-              <div className="space-y-2">
-                <Label>Tipo</Label>
-                <div className="flex gap-2">
-                  <Select value={form.tipo} onValueChange={(v: any) => setForm({ ...form, tipo: v })}>
-                    <SelectTrigger className="flex-1"><SelectValue placeholder="Selecione o tipo" /></SelectTrigger>
-                    <SelectContent>
-                      {tipos.map(t => <SelectItem key={t.id} value={t.nome}>{t.nome}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  {!isViewer && (
-                    <>
-                      <Button type="button" variant="outline" size="icon" title="Inserir tipo" onClick={()=>{ setNewTipoName(''); setAddTipoOpen(true); }}>
-                        <Plus className="h-4 w-4" />
-                      </Button>
-                      <Button type="button" variant="outline" size="icon" title="Editar tipo" onClick={openEditTipo}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button type="button" variant="outline" size="icon" title="Excluir tipo" onClick={openDeleteTipo}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </>
-                  )}
+          {/* Form */}
+          <Card className="bg-card/50 backdrop-blur-sm">
+            <CardHeader><CardTitle>Novo lançamento</CardTitle></CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Tipo */}
+                <div className="space-y-2">
+                  <Label>Tipo</Label>
+                  <div className="flex gap-2">
+                    <Select value={form.tipo} onValueChange={(v: any) => setForm({ ...form, tipo: v })}>
+                      <SelectTrigger className="flex-1"><SelectValue placeholder="Selecione o tipo" /></SelectTrigger>
+                      <SelectContent>
+                        {tipos.map(t => <SelectItem key={t.id} value={t.nome}>{t.nome}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    {!isViewer && (
+                      <>
+                        <Button type="button" variant="outline" size="icon" title="Inserir tipo" onClick={()=>{ setNewTipoName(''); setAddTipoOpen(true); }}>
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                        <Button type="button" variant="outline" size="icon" title="Editar tipo" onClick={openEditTipo}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button type="button" variant="outline" size="icon" title="Excluir tipo" onClick={openDeleteTipo}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">Gerencie tipos (evento, rifa, bazar, campanha...).</p>
                 </div>
-                <p className="text-xs text-muted-foreground">Gerencie tipos (evento, rifa, bazar, campanha...).</p>
-              </div>
 
-              {/* Método */}
-              <div className="space-y-2">
-                <Label>Método de pagamento</Label>
-                <div className="flex gap-2 items-center">
-                  <Select
-                    value={form.metodo}
-                    onValueChange={(v: any) => setForm({ ...form, metodo: v })}
-                    disabled={isViewer} // viewer travado em PIX
-                  >
-                    <SelectTrigger className="w-48"><SelectValue placeholder="Selecione o método" /></SelectTrigger>
-                    <SelectContent>
-                      {metodos.map(m => <SelectItem key={m.id} value={m.nome}>{m.nome}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  {!isViewer && (
-                    <>
-                      <Button type="button" variant="outline" size="icon" title="Inserir método" onClick={()=>{ setNewMetodoName(''); setAddMetodoOpen(true); }}>
-                        <Plus className="h-4 w-4" />
-                      </Button>
-                      <Button type="button" variant="outline" size="icon" title="Editar método" onClick={openEditMetodo}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button type="button" variant="outline" size="icon" title="Excluir método" onClick={openDeleteMetodo}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </>
-                  )}
+                {/* Método */}
+                <div className="space-y-2">
+                  <Label>Método de pagamento</Label>
+                  <div className="flex gap-2 items-center">
+                    <Select
+                      value={form.metodo}
+                      onValueChange={(v: any) => setForm({ ...form, metodo: v })}
+                      disabled={isViewer} // viewer travado em PIX
+                    >
+                      <SelectTrigger className="w-48"><SelectValue placeholder="Selecione o método" /></SelectTrigger>
+                      <SelectContent>
+                        {metodos.map(m => <SelectItem key={m.id} value={m.nome}>{m.nome}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    {!isViewer && (
+                      <>
+                        <Button type="button" variant="outline" size="icon" title="Inserir método" onClick={()=>{ setNewMetodoName(''); setAddMetodoOpen(true); }}>
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                        <Button type="button" variant="outline" size="icon" title="Editar método" onClick={openEditMetodo}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button type="button" variant="outline" size="icon" title="Excluir método" onClick={openDeleteMetodo}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                  {isViewer && <p className="text-xs text-muted-foreground">Para seu perfil, o método é sempre PIX.</p>}
                 </div>
-                {isViewer && <p className="text-xs text-muted-foreground">Para seu perfil, o método é sempre PIX.</p>}
+
+                <div className="space-y-2">
+                  <Label>Descrição</Label>
+                  <Input
+                    placeholder={form.tipo === 'doacao' ? 'Ex.: Doação voluntária' : 'Ex.: Camiseta branca M'}
+                    value={form.descricao}
+                    onChange={(e) => setForm({ ...form, descricao: e.target.value })}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Valor (R$)</Label>
+                  <Input inputMode="decimal" placeholder="0,00" value={form.valor} onChange={(e)=>setForm({ ...form, valor: e.target.value })}/>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Matrícula</Label>
+                  <Input
+                    placeholder="Ex.: 2024-001"
+                    value={isViewer ? (myMatricula ?? '') : form.matricula}
+                    onChange={(e) => setForm({ ...form, matricula: e.target.value })}
+                    onBlur={(e) => resolveMembro(e.target.value)}
+                    disabled={isViewer} // << trava para viewer
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {isViewer
+                      ? myMatricula
+                        ? <>Lançamento vinculado à sua matrícula <span className="font-mono">{myMatricula}</span>.</>
+                        : 'Seu perfil não possui matrícula vinculada.'
+                      : membroResolvido?.nome
+                          ? `Vinculado a: ${membroResolvido.nome}`
+                          : form.matricula
+                            ? 'Pressione Tab ou clique fora para buscar a matrícula.'
+                            : 'Se preencher, o valor será atrelado ao membro.'}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Data do movimento</Label>
+                  <Input type="date" value={form.data} onChange={(e)=>setForm({ ...form, data: e.target.value })}/>
+                </div>
+
+                <div className="md:col-span-2 space-y-2">
+                  <Label>Observações</Label>
+                  <Textarea
+                    placeholder="Detalhes adicionais..."
+                    value={form.observacoes}
+                    onChange={(e) => setForm({ ...form, observacoes: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">Observações são salvas junto ao lançamento.</p>
+                </div>
+
+                <div className="md:col-span-2 flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={resetForm}>Limpar</Button>
+                  <Button type="submit" className="bg-gradient-sacred hover:opacity-90">
+                    <Plus className="h-4 w-4 mr-2" /> Lançar
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          {/* Lista */}
+          <Card className="bg-card/30 backdrop-blur-sm">
+            <CardHeader><CardTitle>Últimos lançamentos</CardTitle></CardHeader>
+            <CardContent>
+              <div className="flex flex-col sm:flex-row gap-4 mb-4 items-end">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                  <Input placeholder="Buscar por descrição, matrícula, método, tipo ou observações..." value={search} onChange={(e)=>setSearch(e.target.value)} className="pl-10" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch id="apenasHoje" checked={apenasHoje} onCheckedChange={setApenasHoje} />
+                  <Label htmlFor="apenasHoje">Apenas de hoje</Label>
+                </div>
               </div>
 
-              <div className="space-y-2">
-                <Label>Descrição</Label>
-                <Input
-                  placeholder={form.tipo === 'doacao' ? 'Ex.: Doação voluntária' : 'Ex.: Camiseta branca M'}
-                  value={form.descricao}
-                  onChange={(e) => setForm({ ...form, descricao: e.target.value })}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Valor (R$)</Label>
-                <Input inputMode="decimal" placeholder="0,00" value={form.valor} onChange={(e)=>setForm({ ...form, valor: e.target.value })}/>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Matrícula</Label>
-                <Input
-                  placeholder="Ex.: 2024-001"
-                  value={isViewer ? (myMatricula ?? '') : form.matricula}
-                  onChange={(e) => setForm({ ...form, matricula: e.target.value })}
-                  onBlur={(e) => resolveMembro(e.target.value)}
-                  disabled={isViewer} // << trava para viewer
-                />
-                <p className="text-xs text-muted-foreground">
-                  {isViewer
-                    ? myMatricula
-                      ? <>Lançamento vinculado à sua matrícula <span className="font-mono">{myMatricula}</span>.</>
-                      : 'Seu perfil não possui matrícula vinculada.'
-                    : membroResolvido?.nome
-                        ? `Vinculado a: ${membroResolvido.nome}`
-                        : form.matricula
-                          ? 'Pressione Tab ou clique fora para buscar a matrícula.'
-                          : 'Se preencher, o valor será atrelado ao membro.'}
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Data do movimento</Label>
-                <Input type="date" value={form.data} onChange={(e)=>setForm({ ...form, data: e.target.value })}/>
-              </div>
-
-              <div className="md:col-span-2 space-y-2">
-                <Label>Observações</Label>
-                <Textarea
-                  placeholder="Detalhes adicionais..."
-                  value={form.observacoes}
-                  onChange={(e) => setForm({ ...form, observacoes: e.target.value })}
-                />
-                <p className="text-xs text-muted-foreground">Observações são salvas junto ao lançamento.</p>
-              </div>
-
-              <div className="md:col-span-2 flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={resetForm}>Limpar</Button>
-                <Button type="submit" className="bg-gradient-sacred hover:opacity-90">
-                  <Plus className="h-4 w-4 mr-2" /> Lançar
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-
-        {/* Lista */}
-        <Card className="bg-card/30 backdrop-blur-sm">
-          <CardHeader><CardTitle>Últimos lançamentos</CardTitle></CardHeader>
-          <CardContent>
-            <div className="flex flex-col sm:flex-row gap-4 mb-4 items-end">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
-                <Input placeholder="Buscar por descrição, matrícula, método, tipo ou observações..." value={search} onChange={(e)=>setSearch(e.target.value)} className="pl-10" />
-              </div>
-              <div className="flex items-center gap-2">
-                <Switch id="apenasHoje" checked={apenasHoje} onCheckedChange={setApenasHoje} />
-                <Label htmlFor="apenasHoje">Apenas de hoje</Label>
-              </div>
-            </div>
-
-            {loading ? (
-              <div className="space-y-4">{[1,2,3].map(i => <div key={i} className="h-16 bg-muted/20 rounded animate-pulse" />)}</div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border/50">
-                    <TableHead>Data</TableHead>
-                    <TableHead>Tipo</TableHead>
-                    <TableHead>Descrição</TableHead>
-                    <TableHead>Matrícula</TableHead>
-                    <TableHead>Método</TableHead>
-                    <TableHead className="text-right">Valor</TableHead>
-                    {!isViewer && <TableHead className="w-[100px]">Ações</TableHead>}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {itensFiltrados.map(item => (
-                    <TableRow key={item.id} className="border-border/50">
-                      <TableCell>{new Date(item.data).toLocaleDateString('pt-BR')}</TableCell>
-                      <TableCell>
-                        <Badge variant={item.tipo === 'doacao' ? 'default' : item.tipo === 'compra' ? 'secondary' : 'outline'}>
-                          {item.tipo}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="max-w-[280px] truncate" title={item.descricao || ''}>{item.descricao || '-'}</TableCell>
-                      <TableCell className="font-mono">{item.matricula || '-'}</TableCell>
-                      <TableCell className="capitalize">{item.metodo || '-'}</TableCell>
-                      <TableCell className="text-right font-semibold">{formatBRL(item.valor_centavos)}</TableCell>
-                      {!isViewer && (
-                        <TableCell>
-                          <Button size="sm" variant="outline" className="hover:bg-destructive hover:text-destructive-foreground" onClick={()=>handleDelete(item.id)} title="Excluir">
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </TableCell>
-                      )}
+              {loading ? (
+                <div className="space-y-4">{[1,2,3].map(i => <div key={i} className="h-16 bg-muted/20 rounded animate-pulse" />)}</div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-border/50">
+                      <TableHead>Data</TableHead>
+                      <TableHead>Tipo</TableHead>
+                      <TableHead>Descrição</TableHead>
+                      <TableHead>Matrícula</TableHead>
+                      <TableHead>Método</TableHead>
+                      <TableHead className="text-right">Valor</TableHead>
+                      {!isViewer && <TableHead className="w-[100px]">Ações</TableHead>}
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
+                  </TableHeader>
+                  <TableBody>
+                    {itensFiltrados.map(item => (
+                      <TableRow key={item.id} className="border-border/50">
+                        <TableCell>{new Date(item.data).toLocaleDateString('pt-BR')}</TableCell>
+                        <TableCell>
+                          <Badge variant={item.tipo === 'doacao' ? 'default' : item.tipo === 'compra' ? 'secondary' : 'outline'}>
+                            {item.tipo}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="max-w-[280px] truncate" title={item.descricao || ''}>{item.descricao || '-'}</TableCell>
+                        <TableCell className="font-mono">{item.matricula || '-'}</TableCell>
+                        <TableCell className="capitalize">{item.metodo || '-'}</TableCell>
+                        <TableCell className="text-right font-semibold">{formatBRL(item.valor_centavos)}</TableCell>
+                        {!isViewer && (
+                          <TableCell>
+                            <Button size="sm" variant="outline" className="hover:bg-destructive hover:text-destructive-foreground" onClick={()=>handleDelete(item.id)} title="Excluir">
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
 
-            {!loading && itensFiltrados.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
-                <Receipt className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                <p>Nenhum lançamento encontrado.</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              {!loading && itensFiltrados.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Receipt className="h-12 w-12 mx-auto mb-2 opacity-20" />
+                  <p>Nenhum lançamento encontrado.</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-        {/* Pergunta: imprimir cupom fiscal? */}
-        <Dialog open={askReceiptOpen} onOpenChange={setAskReceiptOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Imprimir cupom fiscal?</DialogTitle>
-              <DialogDescription>Deseja gerar o cupom fiscal do lançamento registrado?</DialogDescription>
-            </DialogHeader>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setAskReceiptOpen(false)}>Não agora</Button>
-              <Button onClick={imprimirCupom} className="gap-2"><FileText className="h-4 w-4" />Gerar cupom</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        {/* POPUPs: Tipos (bloqueados para viewer) */}
-        <Dialog open={addTipoOpen} onOpenChange={setAddTipoOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Novo tipo de pagamento diverso</DialogTitle>
-              <DialogDescription>Adicione um tipo (evento, rifa, bazar, campanha...).</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3">
-              <Label htmlFor="novo-tipo">Nome do tipo</Label>
-              <Input id="novo-tipo" placeholder="Ex.: evento" value={newTipoName} onChange={(e)=>setNewTipoName(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') submitAddTipo(); }} />
-              <div className="flex justify-end gap-2 pt-1">
-                <Button variant="outline" onClick={()=>setAddTipoOpen(false)}>Cancelar</Button>
-                <Button onClick={submitAddTipo} disabled={!newTipoName.trim() || isViewer}>Adicionar</Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={editTipoOpen} onOpenChange={setEditTipoOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Editar tipo</DialogTitle><DialogDescription>Renomeie o tipo selecionado.</DialogDescription></DialogHeader>
-            <div className="space-y-3">
-              <Label htmlFor="edit-tipo">Nome</Label>
-              <Input id="edit-tipo" value={editTipoName} onChange={(e)=>setEditTipoName(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') submitEditTipo(); }} />
+          {/* Pergunta: imprimir cupom fiscal? */}
+          <Dialog open={askReceiptOpen} onOpenChange={setAskReceiptOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Imprimir cupom fiscal?</DialogTitle>
+                <DialogDescription>Deseja gerar o cupom fiscal do lançamento registrado?</DialogDescription>
+              </DialogHeader>
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={()=>setEditTipoOpen(false)}>Cancelar</Button>
-                <Button onClick={submitEditTipo} disabled={!editTipoName.trim() || isViewer}>Salvar</Button>
+                <Button variant="outline" onClick={() => setAskReceiptOpen(false)}>Não agora</Button>
+                <Button onClick={imprimirCupom} className="gap-2"><FileText className="h-4 w-4" />Gerar cupom</Button>
               </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
 
-        <Dialog open={deleteTipoOpen} onOpenChange={setDeleteTipoOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Excluir tipo?</DialogTitle><DialogDescription>Essa ação não pode ser desfeita.</DialogDescription></DialogHeader>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={()=>setDeleteTipoOpen(false)}>Cancelar</Button>
-              <Button variant="destructive" onClick={submitDeleteTipo} disabled={isViewer}>Excluir</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        {/* POPUPs: Métodos (bloqueados para viewer) */}
-        <Dialog open={addMetodoOpen} onOpenChange={setAddMetodoOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Novo método de pagamento</DialogTitle><DialogDescription>Adicione um método personalizado.</DialogDescription></DialogHeader>
-            <div className="space-y-3">
-              <Label htmlFor="novo-metodo">Nome do método</Label>
-              <Input id="novo-metodo" placeholder="Ex.: boleto" value={newMetodoName} onChange={(e)=>setNewMetodoName(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') submitAddMetodo(); }} />
-              <div className="flex justify-end gap-2 pt-1">
-                <Button variant="outline" onClick={()=>setAddMetodoOpen(false)}>Cancelar</Button>
-                <Button onClick={submitAddMetodo} disabled={!newMetodoName.trim() || isViewer}>Adicionar</Button>
+          {/* POPUPs: Tipos (bloqueados para viewer) */}
+          <Dialog open={addTipoOpen} onOpenChange={setAddTipoOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Novo tipo de pagamento diverso</DialogTitle>
+                <DialogDescription>Adicione um tipo (evento, rifa, bazar, campanha...).</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                <Label htmlFor="novo-tipo">Nome do tipo</Label>
+                <Input id="novo-tipo" placeholder="Ex.: evento" value={newTipoName} onChange={(e)=>setNewTipoName(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') submitAddTipo(); }} />
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button variant="outline" onClick={()=>setAddTipoOpen(false)}>Cancelar</Button>
+                  <Button onClick={submitAddTipo} disabled={!newTipoName.trim() || isViewer}>Adicionar</Button>
+                </div>
               </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
 
-        <Dialog open={editMetodoOpen} onOpenChange={setEditMetodoOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Editar método</DialogTitle><DialogDescription>Renomeie o método selecionado.</DialogDescription></DialogHeader>
-            <div className="space-y-3">
-              <Label htmlFor="edit-metodo">Nome</Label>
-              <Input id="edit-metodo" value={editMetodoName} onChange={(e)=>setEditMetodoName(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') submitEditMetodo(); }} />
+          <Dialog open={editTipoOpen} onOpenChange={setEditTipoOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader><DialogTitle>Editar tipo</DialogTitle><DialogDescription>Renomeie o tipo selecionado.</DialogDescription></DialogHeader>
+              <div className="space-y-3">
+                <Label htmlFor="edit-tipo">Nome</Label>
+                <Input id="edit-tipo" value={editTipoName} onChange={(e)=>setEditTipoName(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') submitEditTipo(); }} />
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={()=>setEditTipoOpen(false)}>Cancelar</Button>
+                  <Button onClick={submitEditTipo} disabled={!editTipoName.trim() || isViewer}>Salvar</Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={deleteTipoOpen} onOpenChange={setDeleteTipoOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader><DialogTitle>Excluir tipo?</DialogTitle><DialogDescription>Essa ação não pode ser desfeita.</DialogDescription></DialogHeader>
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={()=>setEditMetodoOpen(false)}>Cancelar</Button>
-                <Button onClick={submitEditMetodo} disabled={!editMetodoName.trim() || isViewer}>Salvar</Button>
+                <Button variant="outline" onClick={()=>setDeleteTipoOpen(false)}>Cancelar</Button>
+                <Button variant="destructive" onClick={submitDeleteTipo} disabled={isViewer}>Excluir</Button>
               </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
 
-        <Dialog open={deleteMetodoOpen} onOpenChange={setDeleteMetodoOpen}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Excluir método?</DialogTitle><DialogDescription>Essa ação não pode ser desfeita.</DialogDescription></DialogHeader>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={()=>setDeleteMetodoOpen(false)}>Cancelar</Button>
-              <Button variant="destructive" onClick={submitDeleteMetodo} disabled={isViewer}>Excluir</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
+          {/* POPUPs: Métodos (bloqueados para viewer) */}
+          <Dialog open={addMetodoOpen} onOpenChange={setAddMetodoOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader><DialogTitle>Novo método de pagamento</DialogTitle><DialogDescription>Adicione um método personalizado.</DialogDescription></DialogHeader>
+              <div className="space-y-3">
+                <Label htmlFor="novo-metodo">Nome do método</Label>
+                <Input id="novo-metodo" placeholder="Ex.: boleto" value={newMetodoName} onChange={(e)=>setNewMetodoName(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') submitAddMetodo(); }} />
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button variant="outline" onClick={()=>setAddMetodoOpen(false)}>Cancelar</Button>
+                  <Button onClick={submitAddMetodo} disabled={!newMetodoName.trim() || isViewer}>Adicionar</Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={editMetodoOpen} onOpenChange={setEditMetodoOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader><DialogTitle>Editar método</DialogTitle><DialogDescription>Renomeie o método selecionado.</DialogDescription></DialogHeader>
+              <div className="space-y-3">
+                <Label htmlFor="edit-metodo">Nome</Label>
+                <Input id="edit-metodo" value={editMetodoName} onChange={(e)=>setEditMetodoName(e.target.value)} onKeyDown={(e)=>{ if(e.key==='Enter') submitEditMetodo(); }} />
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={()=>setEditMetodoOpen(false)}>Cancelar</Button>
+                  <Button onClick={submitEditMetodo} disabled={!editMetodoName.trim() || isViewer}>Salvar</Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={deleteMetodoOpen} onOpenChange={setDeleteMetodoOpen}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader><DialogTitle>Excluir método?</DialogTitle><DialogDescription>Essa ação não pode ser desfeita.</DialogDescription></DialogHeader>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={()=>setDeleteMetodoOpen(false)}>Cancelar</Button>
+                <Button variant="destructive" onClick={submitDeleteMetodo} disabled={isViewer}>Excluir</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </FeatureGate>
     </DashboardLayout>
   );
 }

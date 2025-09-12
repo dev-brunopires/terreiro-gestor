@@ -14,7 +14,8 @@ import { Calendar as CalendarPicker } from '@/components/ui/calendar';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { Receipt, Search, Calendar, AlarmPlus, Zap, UserSearch } from 'lucide-react';
-
+import FeatureGate from "@/components/FeatureGate";
+import UpgradeCard from "@/components/UpgradeCard";
 interface Fatura {
   id: string;
   refer: string;                // 'YYYYMM'
@@ -28,7 +29,6 @@ interface Fatura {
   forma_pagamento?: string;
   membro: { nome: string; matricula?: string };
   created_at: string;
-  // NOVO: guardamos o membro_id para ações
   membro_id: string;
 }
 
@@ -61,7 +61,7 @@ export default function Faturas() {
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [salvandoMatricula, setSalvandoMatricula] = useState(false);
 
-  // NOVO — troca de plano
+  // Troca de plano
   const [planos, setPlanos] = useState<PlanoLite[]>([]);
   const [planoDlgOpen, setPlanoDlgOpen] = useState(false);
   const [planoTarget, setPlanoTarget] = useState<{ membro_id: string } | null>(null);
@@ -179,7 +179,6 @@ export default function Faturas() {
         }))
       );
 
-      // deixa o seletor de planos pronto
       await loadPlanos(orgId);
     } catch (err: any) {
       console.error(err);
@@ -280,15 +279,15 @@ export default function Faturas() {
       }
       if (!membro) throw new Error('Matrícula não encontrada neste org.');
 
-      // 2) assinatura: ativa OU fallback para última assinatura do membro
+      // 2) assinatura: ativa (status) OU fallback para última assinatura do membro
       let assinatura: any | null = null;
       {
         const { data, error } = await supabase
           .from('assinaturas')
-          .select('id, plano_id, ativo, status, inicio, fim, dt_fim, created_at, org_id')
+          .select('id, plano_id, status, inicio, fim, dt_fim, created_at, org_id')
           .or(`org_id.eq.${orgId},org_id.is.null`)
           .eq('membro_id', membro.id)
-          .or('ativo.eq.true,status.eq.ativa')
+          .eq('status', 'ativa')
           .is('fim', null)
           .is('dt_fim', null)
           .order('inicio', { ascending: false, nullsFirst: false })
@@ -300,7 +299,7 @@ export default function Faturas() {
       if (!assinatura) {
         const { data, error } = await supabase
           .from('assinaturas')
-          .select('id, plano_id, ativo, status, inicio, created_at, org_id')
+          .select('id, plano_id, status, inicio, created_at, org_id')
           .or(`org_id.eq.${orgId},org_id.is.null`)
           .eq('membro_id', membro.id)
           .order('inicio', { ascending: false, nullsFirst: false })
@@ -326,10 +325,8 @@ export default function Faturas() {
       const diaVenc = clampDiaDoMes(ano, mes1a12, Number(plano.dia_vencimento));
       const dtVenc = new Date(ano, mes1a12 - 1, diaVenc);
 
-      // valores normalizados
       const dtVencDate = `${dtVenc.getFullYear()}-${String(dtVenc.getMonth()+1).padStart(2,'0')}-${String(dtVenc.getDate()).padStart(2,'0')}`;
       const valorCent = Number(plano.valor_centavos);
-      const valorDecimal = Number((valorCent / 100).toFixed(2));
 
       // 5) checar duplicidade
       const { data: jaExiste, error: exErr } = await supabase
@@ -349,22 +346,21 @@ export default function Faturas() {
         return;
       }
 
-      // 6) inserir fatura (preenche data_vencimento e dt_vencimento)
+      // 6) inserir fatura (sem coluna 'valor' e com terreiro_id = orgId)
       const { error: insErr } = await supabase
         .from('faturas')
         .insert([{
           assinatura_id: assinatura.id,
           membro_id: membro.id,
           plano_id: plano.id,
-          valor: valorDecimal,                 // numeric NOT NULL
           valor_centavos: valorCent,
           vl_desconto_centavos: 0,
           refer,
-          data_vencimento: dtVencDate,         // <- NOT NULL (DATE)
-          dt_vencimento: dtVencDate,           // manter espelhado
+          data_vencimento: dtVencDate,
+          dt_vencimento: dtVencDate,
           status: 'pendente',
           org_id: orgId,
-          terreiro_id: auth.user.id,           // faturas.terreiro_id -> auth.users(id)
+          terreiro_id: orgId, // FK aponta para terreiros(id)
           usuario_operacao: auth.user.email ?? auth.user.id,
         } as any]);
 
@@ -398,13 +394,13 @@ export default function Faturas() {
     if (profErr) throw profErr;
     const orgId = profile!.org_id;
 
-    // 1) assinatura ativa (atualiza) ou cria uma nova
+    // 1) assinatura ativa (atualiza) ou cria uma nova — sem depender de 'ativo'
     const { data: assinAtual } = await supabase
       .from('assinaturas')
-      .select('id, plano_id, ativo, status, inicio, fim, dt_fim')
+      .select('id, plano_id, status, inicio, fim, dt_fim')
       .eq('membro_id', membro_id)
       .or(`org_id.eq.${orgId},org_id.is.null`)
-      .or('ativo.eq.true,status.eq.ativa')
+      .eq('status', 'ativa')
       .is('fim', null)
       .is('dt_fim', null)
       .maybeSingle();
@@ -423,9 +419,9 @@ export default function Faturas() {
           plano_id: plano.id,
           inicio: new Date().toISOString().slice(0, 10),
           status: 'ativa',
-          ativo: true,
+          ativo: true,           // pode manter true; não rely no filtro
           org_id: orgId,
-          terreiro_id: auth.user.id, // conforme seu schema
+          terreiro_id: orgId,    // FK correta
         } as any);
       if (insAssErr) throw insAssErr;
     }
@@ -443,24 +439,22 @@ export default function Faturas() {
       .from('faturas')
       .select('id, refer')
       .eq('membro_id', membro_id)
-      .or(`org_id.eq.${orgId},org_id.is.null`) // <-- aceita org_id NULL também
+      .or(`org_id.eq.${orgId},org_id.is.null`)
       .in('status', ['pendente', 'vencida']);
 
     if (qErr) throw qErr;
 
-    // monta updates calculando vencimento pelo dia do plano para cada referência
     const updates = (abertas ?? []).map((f: any) => {
       const venc = makeDateFromReferAndDay(f.refer, plano.dia_vencimento);
       return {
         id: f.id,
         valor_centavos: plano.valor_centavos,
-        valor: Number((plano.valor_centavos / 100).toFixed(2)), // mantém numeric em sincronia
         dt_vencimento: venc,
-        data_vencimento: venc, // espelhado (DATE)
+        data_vencimento: venc,
       };
     });
 
-    // upsert em lotes (evita payload grande)
+    // upsert em lotes
     const chunkSize = 100;
     for (let i = 0; i < updates.length; i += chunkSize) {
       const chunk = updates.slice(i, i + chunkSize);
@@ -558,332 +552,334 @@ export default function Faturas() {
   // ---------- render ----------
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
-              <Receipt className="h-8 w-8 text-primary" />
-              Faturas
-            </h1>
-            <p className="text-muted-foreground">Somente as 25 últimas do mês de referência atual</p>
+      <FeatureGate code="faturas" fallback={<UpgradeCard needed="Faturas" />}>
+        <div className="space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
+                <Receipt className="h-8 w-8 text-primary" />
+                Faturas
+              </h1>
+              <p className="text-muted-foreground">Somente as 25 últimas do mês de referência atual</p>
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                onClick={verificarEEstenderHorizonte}
+                disabled={estendendoHorizonte}
+                variant="outline"
+                className="hover:opacity-90"
+                title="Se a última fatura estiver a ≤ 6 meses, gera +24 meses"
+              >
+                <AlarmPlus className="h-4 w-4 mr-2" />
+                {estendendoHorizonte ? 'Verificando...' : 'Estender +24m se precisar'}
+              </Button>
+            </div>
           </div>
 
-          <div className="flex gap-2">
-            <Button
-              onClick={verificarEEstenderHorizonte}
-              disabled={estendendoHorizonte}
-              variant="outline"
-              className="hover:opacity-90"
-              title="Se a última fatura estiver a ≤ 6 meses, gera +24 meses"
-            >
-              <AlarmPlus className="h-4 w-4 mr-2" />
-              {estendendoHorizonte ? 'Verificando...' : 'Estender +24m se precisar'}
-            </Button>
-          </div>
-        </div>
-
-        {/* Seção: Gerar Faturas (dois cards com o mesmo layout) */}
-        <div className="grid gap-6 xl:grid-cols-2">
-          {/* Card: Geral */}
-          <Card className="bg-card/50 backdrop-blur-sm border-border/40">
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2">
-                <Calendar className="h-5 w-5 text-secondary" />
-                Gerar faltantes (geral)
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 items-end">
-                <div className="space-y-1.5">
-                  <Label htmlFor="ano" className="text-sm">Ano</Label>
-                  <Input
-                    id="ano"
-                    type="number"
-                    min="2020"
-                    max="2100"
-                    value={gerarFaturasData.ano}
-                    onChange={(e) => setGerarFaturasData({ ...gerarFaturasData, ano: e.target.value })}
-                  />
+          {/* Seção: Gerar Faturas (dois cards com o mesmo layout) */}
+          <div className="grid gap-6 xl:grid-cols-2">
+            {/* Card: Geral */}
+            <Card className="bg-card/50 backdrop-blur-sm border-border/40">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2">
+                  <Calendar className="h-5 w-5 text-secondary" />
+                  Gerar faltantes (geral)
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 items-end">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ano" className="text-sm">Ano</Label>
+                    <Input
+                      id="ano"
+                      type="number"
+                      min="2020"
+                      max="2100"
+                      value={gerarFaturasData.ano}
+                      onChange={(e) => setGerarFaturasData({ ...gerarFaturasData, ano: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="mes" className="text-sm">Mês</Label>
+                    <Select value={gerarFaturasData.mes} onValueChange={(value) => setGerarFaturasData({ ...gerarFaturasData, mes: value })}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Mês" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-popover border-border">
+                        {Array.from({ length: 12 }, (_, i) => (
+                          <SelectItem key={i + 1} value={String(i + 1).padStart(2, '0')}>
+                            {new Date(2000, i).toLocaleDateString('pt-BR', { month: 'long' })}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      onClick={gerarFaturas}
+                      disabled={gerandoFaturas}
+                      className="w-full bg-gradient-sacred hover:opacity-90"
+                      title="Gera faltantes para todos até a competência"
+                    >
+                      <Zap className="h-4 w-4 mr-2" />
+                      {gerandoFaturas ? 'Gerando...' : 'Gerar faltantes'}
+                    </Button>
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="mes" className="text-sm">Mês</Label>
-                  <Select value={gerarFaturasData.mes} onValueChange={(value) => setGerarFaturasData({ ...gerarFaturasData, mes: value })}>
+              </CardContent>
+            </Card>
+
+            {/* Card: Por matrícula */}
+            <Card className="bg-card/50 backdrop-blur-sm border-border/40">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2">
+                  <UserSearch className="h-5 w-5 text-secondary" />
+                  Gerar faltante (matrícula)
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 items-end">
+                  <div className="space-y-1.5 md:col-span-1">
+                    <Label htmlFor="matricula" className="text-sm">Matrícula</Label>
+                    <Input
+                      id="matricula"
+                      placeholder="Ex.: 2082"
+                      value={matriculaInput}
+                      onChange={(e) => setMatriculaInput(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 md:col-span-1">
+                    <Label className="text-sm">Competência</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className={cn('w-full justify-start text-left font-normal')}
+                          title="Selecione um dia do mês desejado"
+                        >
+                          <Calendar className="mr-2 h-4 w-4" />
+                          {selectedDate
+                            ? selectedDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+                            : 'Escolha a data'}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <CalendarPicker
+                          mode="single"
+                          selected={selectedDate}
+                          onSelect={setSelectedDate}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+
+                  <div className="flex items-end md:col-span-1">
+                    <Button
+                      onClick={gerarFaltantePorMatricula}
+                      disabled={salvandoMatricula}
+                      className="w-full bg-gradient-sacred hover:opacity-90"
+                      title="Lança uma fatura única para a matrícula, usando o plano atual"
+                    >
+                      <UserSearch className="h-4 w-4 mr-2" />
+                      {salvandoMatricula ? 'Lançando...' : 'Gerar'}
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground -mt-2">
+                  O vencimento ajusta para o <b>dia do plano</b> do membro.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Filtros */}
+          <Card className="bg-card/50 backdrop-blur-sm">
+            <CardContent className="pt-6">
+              <div className="flex flex-col sm:flex-row gap-4">
+                <div className="flex-1">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                    <Input
+                      placeholder="Buscar por membro, matrícula ou referência..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
+                </div>
+                <div className="w-full sm:w-48">
+                  <Select value={statusFilter} onValueChange={(v: any) => setStatusFilter(v)}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Mês" />
+                      <SelectValue placeholder="Todos os status" />
                     </SelectTrigger>
                     <SelectContent className="bg-popover border-border">
-                      {Array.from({ length: 12 }, (_, i) => (
-                        <SelectItem key={i + 1} value={String(i + 1).padStart(2, '0')}>
-                          {new Date(2000, i).toLocaleDateString('pt-BR', { month: 'long' })}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="all">Todos os status</SelectItem>
+                      <SelectItem value="aberta">Abertas</SelectItem>
+                      <SelectItem value="paga">Pagas</SelectItem>
+                      <SelectItem value="atrasada">Atrasadas</SelectItem>
+                      <SelectItem value="cancelada">Canceladas</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="flex items-end">
-                  <Button
-                    onClick={gerarFaturas}
-                    disabled={gerandoFaturas}
-                    className="w-full bg-gradient-sacred hover:opacity-90"
-                    title="Gera faltantes para todos até a competência"
-                  >
-                    <Zap className="h-4 w-4 mr-2" />
-                    {gerandoFaturas ? 'Gerando...' : 'Gerar faltantes'}
-                  </Button>
-                </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Card: Por matrícula (mesmo layout) */}
-          <Card className="bg-card/50 backdrop-blur-sm border-border/40">
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2">
-                <UserSearch className="h-5 w-5 text-secondary" />
-                Gerar faltante (matrícula)
+          {/* Tabela de Faturas */}
+          <Card className="bg-card/30 backdrop-blur-sm">
+            <CardHeader>
+              <CardTitle>
+                {filteredFaturas.length} fatura{filteredFaturas.length !== 1 ? 's' : ''} encontrada{filteredFaturas.length !== 1 ? 's' : ''} (mês atual)
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 items-end">
-                <div className="space-y-1.5 md:col-span-1">
-                  <Label htmlFor="matricula" className="text-sm">Matrícula</Label>
-                  <Input
-                    id="matricula"
-                    placeholder="Ex.: 2082"
-                    value={matriculaInput}
-                    onChange={(e) => setMatriculaInput(e.target.value)}
-                  />
+            <CardContent>
+              {loading ? (
+                <div className="space-y-4">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-16 bg-muted/20 rounded animate-pulse" />
+                  ))}
                 </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-border/50">
+                      <TableHead>Membro</TableHead>
+                      <TableHead>Referência</TableHead>
+                      <TableHead>Vencimento</TableHead>
+                      <TableHead>Valor</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Pagamento</TableHead>
+                      <TableHead className="text-right">Ações</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredFaturas.map((fatura) => (
+                      <TableRow key={fatura.id} className="border-border/50">
+                        <TableCell className="font-medium">
+                          {fatura.membro.nome}
+                          {fatura.membro.matricula && (
+                            <div className="text-xs text-muted-foreground">{fatura.membro.matricula}</div>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono">{fatura.refer}</TableCell>
+                        <TableCell>{new Date(fatura.dt_vencimento).toLocaleDateString('pt-BR')}</TableCell>
+                        <TableCell className="font-semibold text-secondary">
+                          {formatCurrency(fatura.valor_centavos)}
+                          {fatura.vl_desconto_centavos > 0 && (
+                            <div className="text-xs text-muted-foreground">
+                              Desc: {formatCurrency(fatura.vl_desconto_centavos)}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>{getStatusBadge(fatura.uiStatus)}</TableCell>
+                        <TableCell>
+                          {fatura.dt_pagamento ? (
+                            <div>
+                              <div className="font-medium">{formatCurrency(fatura.vl_pago_centavos || 0)}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {new Date(fatura.dt_pagamento).toLocaleDateString('pt-BR')}
+                              </div>
+                              <div className="text-xs text-muted-foreground">{fatura.forma_pagamento}</div>
+                            </div>
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setPlanoTarget({ membro_id: fatura.membro_id });
+                              setPlanoEscolhido('');
+                              setPlanoDlgOpen(true);
+                            }}
+                            title="Trocar plano do membro e aplicar nas faturas abertas"
+                          >
+                            Trocar plano
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
 
-                <div className="space-y-1.5 md:col-span-1">
-                  <Label className="text-sm">Competência</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className={cn('w-full justify-start text-left font-normal')}
-                        title="Selecione um dia do mês desejado"
-                      >
-                        <Calendar className="mr-2 h-4 w-4" />
-                        {selectedDate
-                          ? selectedDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
-                          : 'Escolha a data'}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <CalendarPicker
-                        mode="single"
-                        selected={selectedDate}
-                        onSelect={setSelectedDate}
-                        initialFocus
-                      />
-                    </PopoverContent>
-                  </Popover>
+              {!loading && filteredFaturas.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Receipt className="h-12 w-12 mx-auto mb-2 opacity-20" />
+                  <p>Nenhuma fatura encontrada</p>
                 </div>
-
-                <div className="flex items-end md:col-span-1">
-                  <Button
-                    onClick={gerarFaltantePorMatricula}
-                    disabled={salvandoMatricula}
-                    className="w-full bg-gradient-sacred hover:opacity-90"
-                    title="Lança uma fatura única para a matrícula, usando o plano atual"
-                  >
-                    <UserSearch className="h-4 w-4 mr-2" />
-                    {salvandoMatricula ? 'Lançando...' : 'Gerar'}
-                  </Button>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground -mt-2">
-                O vencimento ajusta para o <b>dia do plano</b> do membro.
-              </p>
+              )}
             </CardContent>
           </Card>
         </div>
 
-        {/* Filtros */}
-        <Card className="bg-card/50 backdrop-blur-sm">
-          <CardContent className="pt-6">
-            <div className="flex flex-col sm:flex-row gap-4">
-              <div className="flex-1">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground h-4 w-4" />
-                  <Input
-                    placeholder="Buscar por membro, matrícula ou referência..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10"
-                  />
-                </div>
-              </div>
-              <div className="w-full sm:w-48">
-                <Select value={statusFilter} onValueChange={(v: any) => setStatusFilter(v)}>
+        {/* Dialog — troca de plano */}
+        <Dialog open={planoDlgOpen} onOpenChange={setPlanoDlgOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Trocar plano do membro</DialogTitle>
+              <DialogDescription>
+                Atualiza (ou cria) a assinatura ativa e aplica o novo valor/vencimento nas faturas abertas.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Novo plano</Label>
+                <Select value={planoEscolhido} onValueChange={setPlanoEscolhido}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Todos os status" />
+                    <SelectValue placeholder="Selecione o plano" />
                   </SelectTrigger>
-                  <SelectContent className="bg-popover border-border">
-                    <SelectItem value="all">Todos os status</SelectItem>
-                    <SelectItem value="aberta">Abertas</SelectItem>
-                    <SelectItem value="paga">Pagas</SelectItem>
-                    <SelectItem value="atrasada">Atrasadas</SelectItem>
-                    <SelectItem value="cancelada">Canceladas</SelectItem>
+                  <SelectContent>
+                    {planos.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.nome} — {formatCurrency(p.valor_centavos)} (dia {p.dia_vencimento})
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-          </CardContent>
-        </Card>
 
-        {/* Tabela de Faturas (com ação de trocar plano) */}
-        <Card className="bg-card/30 backdrop-blur-sm">
-          <CardHeader>
-            <CardTitle>
-              {filteredFaturas.length} fatura{filteredFaturas.length !== 1 ? 's' : ''} encontrada{filteredFaturas.length !== 1 ? 's' : ''} (mês atual)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="space-y-4">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-16 bg-muted/20 rounded animate-pulse" />
-                ))}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setPlanoDlgOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (!planoTarget || !planoEscolhido) return;
+                    setSalvandoPlano(true);
+                    try {
+                      const plano = planos.find((x) => x.id === planoEscolhido);
+                      if (!plano) throw new Error('Plano não encontrado');
+
+                      await aplicarPlanoParaMembro(planoTarget.membro_id, plano);
+
+                      toast({ title: 'Plano aplicado', description: 'Assinatura e faturas abertas atualizadas.' });
+                      setPlanoDlgOpen(false);
+                      await loadFaturas();
+                    } catch (e: any) {
+                      console.error(e);
+                      toast({ title: 'Erro ao aplicar plano', description: e?.message ?? 'Tente novamente', variant: 'destructive' });
+                    } finally {
+                      setSalvandoPlano(false);
+                    }
+                  }}
+                  disabled={!planoEscolhido || !planoTarget || salvandoPlano}
+                  className="bg-gradient-sacred hover:opacity-90"
+                >
+                  {salvandoPlano ? 'Aplicando…' : 'Aplicar'}
+                </Button>
               </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border/50">
-                    <TableHead>Membro</TableHead>
-                    <TableHead>Referência</TableHead>
-                    <TableHead>Vencimento</TableHead>
-                    <TableHead>Valor</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Pagamento</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredFaturas.map((fatura) => (
-                    <TableRow key={fatura.id} className="border-border/50">
-                      <TableCell className="font-medium">
-                        {fatura.membro.nome}
-                        {fatura.membro.matricula && (
-                          <div className="text-xs text-muted-foreground">{fatura.membro.matricula}</div>
-                        )}
-                      </TableCell>
-                      <TableCell className="font-mono">{fatura.refer}</TableCell>
-                      <TableCell>{new Date(fatura.dt_vencimento).toLocaleDateString('pt-BR')}</TableCell>
-                      <TableCell className="font-semibold text-secondary">
-                        {formatCurrency(fatura.valor_centavos)}
-                        {fatura.vl_desconto_centavos > 0 && (
-                          <div className="text-xs text-muted-foreground">
-                            Desc: {formatCurrency(fatura.vl_desconto_centavos)}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell>{getStatusBadge(fatura.uiStatus)}</TableCell>
-                      <TableCell>
-                        {fatura.dt_pagamento ? (
-                          <div>
-                            <div className="font-medium">{formatCurrency(fatura.vl_pago_centavos || 0)}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {new Date(fatura.dt_pagamento).toLocaleDateString('pt-BR')}
-                            </div>
-                            <div className="text-xs text-muted-foreground">{fatura.forma_pagamento}</div>
-                          </div>
-                        ) : (
-                          '—'
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setPlanoTarget({ membro_id: fatura.membro_id });
-                            setPlanoEscolhido('');
-                            setPlanoDlgOpen(true);
-                          }}
-                          title="Trocar plano do membro e aplicar nas faturas abertas"
-                        >
-                          Trocar plano
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-
-            {!loading && filteredFaturas.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
-                <Receipt className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                <p>Nenhuma fatura encontrada</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Dialog — troca de plano */}
-      <Dialog open={planoDlgOpen} onOpenChange={setPlanoDlgOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Trocar plano do membro</DialogTitle>
-            <DialogDescription>
-              Atualiza (ou cria) a assinatura ativa e aplica o novo valor/vencimento nas faturas abertas.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Novo plano</Label>
-              <Select value={planoEscolhido} onValueChange={setPlanoEscolhido}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecione o plano" />
-                </SelectTrigger>
-                <SelectContent>
-                  {planos.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.nome} — {formatCurrency(p.valor_centavos)} (dia {p.dia_vencimento})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </div>
-
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setPlanoDlgOpen(false)}>
-                Cancelar
-              </Button>
-              <Button
-                onClick={async () => {
-                  if (!planoTarget || !planoEscolhido) return;
-                  setSalvandoPlano(true);
-                  try {
-                    const plano = planos.find((x) => x.id === planoEscolhido);
-                    if (!plano) throw new Error('Plano não encontrado');
-
-                    await aplicarPlanoParaMembro(planoTarget.membro_id, plano);
-
-                    toast({ title: 'Plano aplicado', description: 'Assinatura e faturas abertas atualizadas.' });
-                    setPlanoDlgOpen(false);
-                    await loadFaturas();
-                  } catch (e: any) {
-                    console.error(e);
-                    toast({ title: 'Erro ao aplicar plano', description: e?.message ?? 'Tente novamente', variant: 'destructive' });
-                  } finally {
-                    setSalvandoPlano(false);
-                  }
-                }}
-                disabled={!planoEscolhido || !planoTarget || salvandoPlano}
-                className="bg-gradient-sacred hover:opacity-90"
-              >
-                {salvandoPlano ? 'Aplicando…' : 'Aplicar'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+          </DialogContent>
+        </Dialog>
+      </FeatureGate>
     </DashboardLayout>
   );
 }

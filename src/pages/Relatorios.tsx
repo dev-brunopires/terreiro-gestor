@@ -21,7 +21,8 @@ import {
   HandCoins,
   Calendar,
 } from 'lucide-react';
-
+import FeatureGate from "@/components/FeatureGate";
+import UpgradeCard from "@/components/UpgradeCard";
 /* ==================== Tipos ==================== */
 interface RelatorioFinanceiro {
   periodo: string;
@@ -726,335 +727,337 @@ export default function Relatorios() {
   /* ==================== UI ==================== */
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
-              <FileBarChart className="h-8 w-8 text-primary" strokeWidth={1.75} />
-              Relatórios
-            </h1>
-            <p className="text-muted-foreground">Análises financeiras e gestão de faturas/pagamentos</p>
-          </div>
-
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={exportarXLSX}>
-              <Download className="h-4 w-4 mr-2" strokeWidth={1.75} />
-              Exportar XLSX
-            </Button>
-            <Button className="bg-gradient-sacred hover:opacity-90" onClick={exportarPDF}>
-              <FileText className="h-4 w-4 mr-2" strokeWidth={1.75} />
-              Exportar PDF
-            </Button>
-          </div>
-        </div>
-
-        {/* Filtros */}
-        <Card className="bg-card/50 backdrop-blur-sm">
-          <CardContent className="pt-6">
-            <div className="grid grid-cols-1 md:grid-cols-8 gap-3 md:gap-4 items-end">
-              {/* Período de */}
-              <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="periodo_inicio">Período de</Label>
-                <div className="relative">
-                  <Calendar
-                    className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/80 pointer-events-none"
-                    strokeWidth={1.75}
-                    aria-hidden="true"
-                  />
-                  <Input
-                    id="periodo_inicio"
-                    type="date"
-                    value={periodoInicio}
-                    onChange={(e) => setPeriodoInicio(e.target.value)}
-                    className="pl-9"
-                  />
-                </div>
-              </div>
-
-              {/* até */}
-              <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="periodo_fim">até</Label>
-                <div className="relative">
-                  <Calendar
-                    className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/80 pointer-events-none"
-                    strokeWidth={1.75}
-                    aria-hidden="true"
-                  />
-                  <Input
-                    id="periodo_fim"
-                    type="date"
-                    value={periodoFim}
-                    onChange={(e) => setPeriodoFim(e.target.value)}
-                    className="pl-9"
-                  />
-                </div>
-              </div>
-
-              {/* Matrícula (com autocomplete) */}
-              <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="matricula_filtro">Matrícula (exata)</Label>
-                <Input
-                  id="matricula_filtro"
-                  list="matriculas_opts"
-                  placeholder="Ex.: 2024-001"
-                  value={matriculaFiltro}
-                  onChange={(e) => setMatriculaFiltro(e.target.value)}
-                />
-                <datalist id="matriculas_opts">
-                  {matOptions.map((m) => (
-                    <option key={m.matricula} value={m.matricula}>
-                      {m.nome ?? ''}
-                    </option>
-                  ))}
-                </datalist>
-              </div>
-
-              {/* Relatório de */}
-              <div className="space-y-2 md:col-span-1">
-                <Label htmlFor="modo_lista">Relatório de</Label>
-                <Select value={modoLista} onValueChange={(v: any) => setModoLista(v)}>
-                  <SelectTrigger id="modo_lista" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-popover border-border">
-                    <SelectItem value="faturas">Faturas</SelectItem>
-                    <SelectItem value="pagamentos">Pagamentos (faturas)</SelectItem>
-                    <SelectItem value="diversos">Pagamentos diversos</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Status (só faturas) */}
-              <div className="space-y-2 md:col-span-1">
-                <Label htmlFor="filtro_status">Status (faturas)</Label>
-                <Select value={filtroStatus} onValueChange={(v: any) => setFiltroStatus(v)} disabled={modoLista !== 'faturas'}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-popover border-border">
-                    <SelectItem value="all">Todos</SelectItem>
-                    <SelectItem value="aberta">Em aberto</SelectItem>
-                    <SelectItem value="paga">Pagas</SelectItem>
-                    <SelectItem value="vencida">Vencidas</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Ação */}
-              <div className="space-y-2 md:col-span-1">
-                <Label>&nbsp;</Label>
-                <Button onClick={gerarRelatorio} disabled={loading} className="w-full">
-                  <Filter className="h-4 w-4 mr-2" strokeWidth={1.75} />
-                  Atualizar
-                </Button>
-              </div>
+      <FeatureGate code="relatorios" fallback={<UpgradeCard needed="Relatórios" />}>
+        <div className="space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
+                <FileBarChart className="h-8 w-8 text-primary" strokeWidth={1.75} />
+                Relatórios
+              </h1>
+              <p className="text-muted-foreground">Análises financeiras e gestão de faturas/pagamentos</p>
             </div>
-          </CardContent>
-        </Card>
 
-        {/* Resumo Financeiro */}
-        {relatorioFinanceiro && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-            <Card className="bg-card/30 backdrop-blur-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <DollarSign className="h-4 w-4" strokeWidth={1.75} />
-                  Total Esperado
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-secondary">
-                  {formatCurrency(relatorioFinanceiro.total_esperado)}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-card/30 backdrop-blur-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <TrendingUp className="h-4 w-4" strokeWidth={1.75} />
-                  Total Recebido
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-green-600">
-                  {formatCurrency(relatorioFinanceiro.total_pago)}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-card/30 backdrop-blur-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Receipt className="h-4 w-4" strokeWidth={1.75} />
-                  Total em Aberto
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-amber-600">
-                  {formatCurrency(relatorioFinanceiro.total_aberto)}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-card/30 backdrop-blur-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Receipt className="h-4 w-4" strokeWidth={1.75} />
-                  Taxa Inadimplência
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-destructive">
-                  {relatorioFinanceiro.taxa_inadimplencia.toFixed(1)}%
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-card/30 backdrop-blur-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <FileText className="h-4 w-4" strokeWidth={1.75} />
-                  Faturas pagas
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {relatorioFinanceiro.faturas_pagas}/{relatorioFinanceiro.total_faturas}
-                </div>
-                <p className="text-xs text-muted-foreground">No período (vencimento)</p>
-              </CardContent>
-            </Card>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={exportarXLSX}>
+                <Download className="h-4 w-4 mr-2" strokeWidth={1.75} />
+                Exportar XLSX
+              </Button>
+              <Button className="bg-gradient-sacred hover:opacity-90" onClick={exportarPDF}>
+                <FileText className="h-4 w-4 mr-2" strokeWidth={1.75} />
+                Exportar PDF
+              </Button>
+            </div>
           </div>
-        )}
 
-        {/* Tabela principal */}
-        <Card className="bg-card/30 backdrop-blur-sm">
-          <CardHeader>
-            <CardTitle>
-              {modoLista === 'diversos'
-                ? `${pagamentosDiversos.length} lançamento${pagamentosDiversos.length !== 1 ? 's' : ''} (pagamentos diversos)`
-                : modoLista === 'pagamentos'
-                  ? `${pagamentos.length} pagamento${pagamentos.length !== 1 ? 's' : ''} encontrados`
-                  : `${faturasFiltradas.length} fatura${faturasFiltradas.length !== 1 ? 's' : ''} encontrada${faturasFiltradas.length !== 1 ? 's' : ''}`}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="space-y-4">
-                {[1, 2, 3].map(i => (
-                  <div key={i} className="h-16 bg-muted/20 rounded animate-pulse" />
-                ))}
+          {/* Filtros */}
+          <Card className="bg-card/50 backdrop-blur-sm">
+            <CardContent className="pt-6">
+              <div className="grid grid-cols-1 md:grid-cols-8 gap-3 md:gap-4 items-end">
+                {/* Período de */}
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="periodo_inicio">Período de</Label>
+                  <div className="relative">
+                    <Calendar
+                      className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/80 pointer-events-none"
+                      strokeWidth={1.75}
+                      aria-hidden="true"
+                    />
+                    <Input
+                      id="periodo_inicio"
+                      type="date"
+                      value={periodoInicio}
+                      onChange={(e) => setPeriodoInicio(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+                </div>
+
+                {/* até */}
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="periodo_fim">até</Label>
+                  <div className="relative">
+                    <Calendar
+                      className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/80 pointer-events-none"
+                      strokeWidth={1.75}
+                      aria-hidden="true"
+                    />
+                    <Input
+                      id="periodo_fim"
+                      type="date"
+                      value={periodoFim}
+                      onChange={(e) => setPeriodoFim(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+                </div>
+
+                {/* Matrícula (com autocomplete) */}
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="matricula_filtro">Matrícula (exata)</Label>
+                  <Input
+                    id="matricula_filtro"
+                    list="matriculas_opts"
+                    placeholder="Ex.: 2024-001"
+                    value={matriculaFiltro}
+                    onChange={(e) => setMatriculaFiltro(e.target.value)}
+                  />
+                  <datalist id="matriculas_opts">
+                    {matOptions.map((m) => (
+                      <option key={m.matricula} value={m.matricula}>
+                        {m.nome ?? ''}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+
+                {/* Relatório de */}
+                <div className="space-y-2 md:col-span-1">
+                  <Label htmlFor="modo_lista">Relatório de</Label>
+                  <Select value={modoLista} onValueChange={(v: any) => setModoLista(v)}>
+                    <SelectTrigger id="modo_lista" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-popover border-border">
+                      <SelectItem value="faturas">Faturas</SelectItem>
+                      <SelectItem value="pagamentos">Pagamentos (faturas)</SelectItem>
+                      <SelectItem value="diversos">Pagamentos diversos</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Status (só faturas) */}
+                <div className="space-y-2 md:col-span-1">
+                  <Label htmlFor="filtro_status">Status (faturas)</Label>
+                  <Select value={filtroStatus} onValueChange={(v: any) => setFiltroStatus(v)} disabled={modoLista !== 'faturas'}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-popover border-border">
+                      <SelectItem value="all">Todos</SelectItem>
+                      <SelectItem value="aberta">Em aberto</SelectItem>
+                      <SelectItem value="paga">Pagas</SelectItem>
+                      <SelectItem value="vencida">Vencidas</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Ação */}
+                <div className="space-y-2 md:col-span-1">
+                  <Label>&nbsp;</Label>
+                  <Button onClick={gerarRelatorio} disabled={loading} className="w-full">
+                    <Filter className="h-4 w-4 mr-2" strokeWidth={1.75} />
+                    Atualizar
+                  </Button>
+                </div>
               </div>
-            ) : modoLista === 'pagamentos' ? (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border/50">
-                    <TableHead>Pago em</TableHead>
-                    <TableHead>Valor</TableHead>
-                    <TableHead>Método</TableHead>
-                    <TableHead>Ref</TableHead>
-                    <TableHead>Matrícula</TableHead>
-                    <TableHead>Membro</TableHead>
-                    <TableHead>Plano</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pagamentos.map((p) => (
-                    <TableRow key={p.id} className="border-border/50">
-                      <TableCell>{new Date(p.pago_em).toLocaleDateString('pt-BR')}</TableCell>
-                      <TableCell className="font-semibold text-secondary">{formatCurrency(p.valor_centavos)}</TableCell>
-                      <TableCell>{p.metodo || '-'}</TableCell>
-                      <TableCell className="font-mono">{p.refer || '-'}</TableCell>
-                      <TableCell className="font-mono">{p.membro_matricula || '-'}</TableCell>
-                      <TableCell className="font-medium">{p.membro_nome || '-'}</TableCell>
-                      <TableCell>{p.plano_nome || '-'}</TableCell>
-                    </TableRow>
+            </CardContent>
+          </Card>
+
+          {/* Resumo Financeiro */}
+          {relatorioFinanceiro && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+              <Card className="bg-card/30 backdrop-blur-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <DollarSign className="h-4 w-4" strokeWidth={1.75} />
+                    Total Esperado
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-secondary">
+                    {formatCurrency(relatorioFinanceiro.total_esperado)}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card/30 backdrop-blur-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4" strokeWidth={1.75} />
+                    Total Recebido
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-green-600">
+                    {formatCurrency(relatorioFinanceiro.total_pago)}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card/30 backdrop-blur-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <Receipt className="h-4 w-4" strokeWidth={1.75} />
+                    Total em Aberto
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-amber-600">
+                    {formatCurrency(relatorioFinanceiro.total_aberto)}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card/30 backdrop-blur-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <Receipt className="h-4 w-4" strokeWidth={1.75} />
+                    Taxa Inadimplência
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-destructive">
+                    {relatorioFinanceiro.taxa_inadimplencia.toFixed(1)}%
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-card/30 backdrop-blur-sm">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <FileText className="h-4 w-4" strokeWidth={1.75} />
+                    Faturas pagas
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">
+                    {relatorioFinanceiro.faturas_pagas}/{relatorioFinanceiro.total_faturas}
+                  </div>
+                  <p className="text-xs text-muted-foreground">No período (vencimento)</p>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {/* Tabela principal */}
+          <Card className="bg-card/30 backdrop-blur-sm">
+            <CardHeader>
+              <CardTitle>
+                {modoLista === 'diversos'
+                  ? `${pagamentosDiversos.length} lançamento${pagamentosDiversos.length !== 1 ? 's' : ''} (pagamentos diversos)`
+                  : modoLista === 'pagamentos'
+                    ? `${pagamentos.length} pagamento${pagamentos.length !== 1 ? 's' : ''} encontrados`
+                    : `${faturasFiltradas.length} fatura${faturasFiltradas.length !== 1 ? 's' : ''} encontrada${faturasFiltradas.length !== 1 ? 's' : ''}`}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="space-y-4">
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="h-16 bg-muted/20 rounded animate-pulse" />
                   ))}
-                </TableBody>
-              </Table>
-            ) : modoLista === 'diversos' ? (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border/50">
-                    <TableHead>Data</TableHead>
-                    <TableHead>Tipo</TableHead>
-                    <TableHead>Descrição</TableHead>
-                    <TableHead>Matrícula</TableHead>
-                    <TableHead>Membro</TableHead>
-                    <TableHead>Método</TableHead>
-                    <TableHead className="text-right">Valor</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pagamentosDiversos.map((d) => (
-                    <TableRow key={d.id} className="border-border/50">
-                      <TableCell>{new Date(d.data).toLocaleDateString('pt-BR')}</TableCell>
-                      <TableCell className="capitalize">{d.tipo || '-'}</TableCell>
-                      <TableCell className="max-w-[280px] truncate" title={d.descricao || ''}>{d.descricao || '-'}</TableCell>
-                      <TableCell className="font-mono">{d.matricula || '-'}</TableCell>
-                      <TableCell className="font-medium">{d.membro_nome || '-'}</TableCell>
-                      <TableCell className="capitalize">{d.metodo || '-'}</TableCell>
-                      <TableCell className="text-right font-semibold">{formatCurrency(d.valor_centavos)}</TableCell>
+                </div>
+              ) : modoLista === 'pagamentos' ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-border/50">
+                      <TableHead>Pago em</TableHead>
+                      <TableHead>Valor</TableHead>
+                      <TableHead>Método</TableHead>
+                      <TableHead>Ref</TableHead>
+                      <TableHead>Matrícula</TableHead>
+                      <TableHead>Membro</TableHead>
+                      <TableHead>Plano</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border/50">
-                    <TableHead>Ref</TableHead>
-                    <TableHead>Matrícula</TableHead>
-                    <TableHead>Membro</TableHead>
-                    <TableHead>Plano</TableHead>
-                    <TableHead>Vencimento</TableHead>
-                    <TableHead>Valor</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Pago em</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {faturasFiltradas.map((fatura) => (
-                    <TableRow key={fatura.id} className="border-border/50">
-                      <TableCell className="font-mono">{fatura.refer}</TableCell>
-                      <TableCell className="font-mono">{fatura.membro_matricula || '-'}</TableCell>
-                      <TableCell className="font-medium">{fatura.membro_nome}</TableCell>
-                      <TableCell>{fatura.plano_nome}</TableCell>
-                      <TableCell>{fatura.dt_vencimento ? new Date(fatura.dt_vencimento).toLocaleDateString('pt-BR') : '-'}</TableCell>
-                      <TableCell className="font-semibold text-secondary">{formatCurrency(fatura.valor_centavos)}</TableCell>
-                      <TableCell>{getStatusBadge(fatura.status)}</TableCell>
-                      <TableCell>{fatura.dt_pagamento ? new Date(fatura.dt_pagamento).toLocaleDateString('pt-BR') : '-'}</TableCell>
+                  </TableHeader>
+                  <TableBody>
+                    {pagamentos.map((p) => (
+                      <TableRow key={p.id} className="border-border/50">
+                        <TableCell>{new Date(p.pago_em).toLocaleDateString('pt-BR')}</TableCell>
+                        <TableCell className="font-semibold text-secondary">{formatCurrency(p.valor_centavos)}</TableCell>
+                        <TableCell>{p.metodo || '-'}</TableCell>
+                        <TableCell className="font-mono">{p.refer || '-'}</TableCell>
+                        <TableCell className="font-mono">{p.membro_matricula || '-'}</TableCell>
+                        <TableCell className="font-medium">{p.membro_nome || '-'}</TableCell>
+                        <TableCell>{p.plano_nome || '-'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : modoLista === 'diversos' ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-border/50">
+                      <TableHead>Data</TableHead>
+                      <TableHead>Tipo</TableHead>
+                      <TableHead>Descrição</TableHead>
+                      <TableHead>Matrícula</TableHead>
+                      <TableHead>Membro</TableHead>
+                      <TableHead>Método</TableHead>
+                      <TableHead className="text-right">Valor</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
+                  </TableHeader>
+                  <TableBody>
+                    {pagamentosDiversos.map((d) => (
+                      <TableRow key={d.id} className="border-border/50">
+                        <TableCell>{new Date(d.data).toLocaleDateString('pt-BR')}</TableCell>
+                        <TableCell className="capitalize">{d.tipo || '-'}</TableCell>
+                        <TableCell className="max-w-[280px] truncate" title={d.descricao || ''}>{d.descricao || '-'}</TableCell>
+                        <TableCell className="font-mono">{d.matricula || '-'}</TableCell>
+                        <TableCell className="font-medium">{d.membro_nome || '-'}</TableCell>
+                        <TableCell className="capitalize">{d.metodo || '-'}</TableCell>
+                        <TableCell className="text-right font-semibold">{formatCurrency(d.valor_centavos)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-border/50">
+                      <TableHead>Ref</TableHead>
+                      <TableHead>Matrícula</TableHead>
+                      <TableHead>Membro</TableHead>
+                      <TableHead>Plano</TableHead>
+                      <TableHead>Vencimento</TableHead>
+                      <TableHead>Valor</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Pago em</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {faturasFiltradas.map((fatura) => (
+                      <TableRow key={fatura.id} className="border-border/50">
+                        <TableCell className="font-mono">{fatura.refer}</TableCell>
+                        <TableCell className="font-mono">{fatura.membro_matricula || '-'}</TableCell>
+                        <TableCell className="font-medium">{fatura.membro_nome}</TableCell>
+                        <TableCell>{fatura.plano_nome}</TableCell>
+                        <TableCell>{fatura.dt_vencimento ? new Date(fatura.dt_vencimento).toLocaleDateString('pt-BR') : '-'}</TableCell>
+                        <TableCell className="font-semibold text-secondary">{formatCurrency(fatura.valor_centavos)}</TableCell>
+                        <TableCell>{getStatusBadge(fatura.status)}</TableCell>
+                        <TableCell>{fatura.dt_pagamento ? new Date(fatura.dt_pagamento).toLocaleDateString('pt-BR') : '-'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
 
-            {!loading && modoLista === 'faturas' && faturasFiltradas.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
-                <FileBarChart className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                <p>Nenhuma fatura encontrada para o filtro</p>
-              </div>
-            )}
+              {!loading && modoLista === 'faturas' && faturasFiltradas.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <FileBarChart className="h-12 w-12 mx-auto mb-2 opacity-20" />
+                  <p>Nenhuma fatura encontrada para o filtro</p>
+                </div>
+              )}
 
-            {!loading && modoLista === 'pagamentos' && pagamentos.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
-                <CreditCard className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                <p>Nenhum pagamento encontrado para o filtro</p>
-              </div>
-            )}
+              {!loading && modoLista === 'pagamentos' && pagamentos.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <CreditCard className="h-12 w-12 mx-auto mb-2 opacity-20" />
+                  <p>Nenhum pagamento encontrado para o filtro</p>
+                </div>
+              )}
 
-            {!loading && modoLista === 'diversos' && pagamentosDiversos.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">
-                <HandCoins className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                <p>Nenhum pagamento diverso encontrado para o filtro</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+              {!loading && modoLista === 'diversos' && pagamentosDiversos.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <HandCoins className="h-12 w-12 mx-auto mb-2 opacity-20" />
+                  <p>Nenhum pagamento diverso encontrado para o filtro</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </FeatureGate>
     </DashboardLayout>
   );
 }
