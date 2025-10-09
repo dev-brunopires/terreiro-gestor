@@ -65,48 +65,18 @@ export function useOrgFeatures(): State {
         setOrgId(org);
 
         if (!org) {
-          // Sem org no perfil → fail-open (evita travar toda a UI)
           setPlanId(null);
           setFeatures(new Set());
           setUnlockAll(true);
           return;
         }
 
-        // 2) contrato ativo da org
-        const { data: contratos, error: cErr } = await supabase
-          .from("saas_org_contracts")
-          .select("*")
-          .eq("org_id", org)
-          .order("created_at", { ascending: false })
-          .limit(3);
-        if (cErr) throw cErr;
-
-        const ativo = (contratos || []).find(isContratoAtivo);
-        const plano = ativo?.plan_id ?? null;
-        setPlanId(plano);
-
-        if (!plano) {
-          // Sem contrato/plano ativo → por política aqui, fail-open para não quebrar navegação
-          setFeatures(new Set());
-          setUnlockAll(true);
-          return;
-        }
-
-        // 3) features do plano
-        const { data: feats, error: fErr } = await supabase
-          .from("saas_plan_features")
-          .select("feature")
-          .eq("plan_id", plano);
-        if (fErr) throw fErr;
-
-        const list = (feats || []).map((r: any) => String(r.feature));
-        const set = new Set(list);
-
-        // Plano sem features definidas → libera tudo (fail-open)
-        setUnlockAll(set.size === 0);
-        setFeatures(set);
+        // Por enquanto, liberar todas as features (fail-open)
+        // Quando houver tabelas de planos SaaS, usar lógica apropriada
+        setPlanId(null);
+        setFeatures(new Set());
+        setUnlockAll(true);
       } catch (e: any) {
-        // Em erro (ex.: RLS), não bloqueie tudo: fail-open + erro para debug
         setError(e?.message || String(e));
         setOrgId(null);
         setPlanId(null);

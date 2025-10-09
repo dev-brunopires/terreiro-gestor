@@ -210,14 +210,13 @@ export function AppSidebar({ className = "" }: { className?: string }) {
   useEffect(() => {
     const meta = (user?.user_metadata as any) || {};
     const raw: string | undefined =
-      (profile as any)?.avatar_url ||
       meta?.avatar_path ||
       meta?.avatar_url ||
       undefined;
     void signAndShowAvatar(raw);
     return () => stopRenew();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.avatar_url, user?.user_metadata, user?.id]);
+  }, [user?.user_metadata, user?.id]);
 
   // realtime: se o profile mudar, atualiza (inclusive para null -> some da sidebar)
   useEffect(() => {
@@ -362,7 +361,7 @@ export function AppSidebar({ className = "" }: { className?: string }) {
             </button>
           ) : (
             <Button
-              variant="secondary"
+              variant="outline"
               className="w-full justify-start gap-2 rounded-xl"
               onClick={toggleTheme}
               title={isDark ? "Tema claro" : "Tema escuro"}

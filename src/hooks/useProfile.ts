@@ -10,8 +10,6 @@ export type Profile = {
   org_id: string | null;
   role: Role;
   nome: string | null;
-  membro_id?: string | null;
-  must_reset_password?: boolean | null;
 };
 
 type UseProfileResult = {
@@ -45,7 +43,7 @@ export function useProfile(user: User | null): UseProfileResult {
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("user_id, org_id, role, nome, membro_id, must_reset_password")
+      .select("user_id, org_id, role, nome")
       .eq("user_id", uid)
       .maybeSingle();
 
@@ -61,8 +59,6 @@ export function useProfile(user: User | null): UseProfileResult {
               org_id: data.org_id,
               role,
               nome: data.nome,
-              membro_id: (data as any).membro_id ?? null,
-              must_reset_password: (data as any).must_reset_password ?? null,
             }
           : null
       );

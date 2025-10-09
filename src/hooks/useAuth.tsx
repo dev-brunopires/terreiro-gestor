@@ -70,44 +70,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loadPermissionsAndFeatures = async (prof: Profile | null) => {
     let perms: string[] = [];
-    let feats: string[] = [];
+    const feats: string[] = [];
 
-    try {
-      // carrega permissões explícitas
-      if (prof?.user_id) {
-        const { data, error } = await supabase
-          .from('current_user_permissions')
-          .select('permission');
-        if (error) throw error;
-        if (data?.length) {
-          perms = data.map((d: any) => d.permission as string);
-        }
-      }
-    } catch {
-      // ignora, cai no fallback
-    }
-
-    // fallback por role
-    if (!perms.length && prof?.role) {
+    // Usar permissões baseadas em role apenas
+    if (prof?.role) {
       perms = rolePermissions[prof.role] ?? [];
-    }
-
-    // carrega features pelo plano da assinatura ativa
-    if (prof?.org_id) {
-      const { data: sub } = await supabase
-        .from('assinaturas')
-        .select('plano_id')
-        .eq('org_id', prof.org_id)
-        .eq('status', 'ativa')
-        .maybeSingle();
-
-      if (sub?.plano_id) {
-        const { data: featsData } = await supabase
-          .from('plan_features')
-          .select('feature')
-          .eq('plano_id', sub.plano_id);
-        feats = (featsData ?? []).map(f => f.feature);
-      }
     }
 
     setPermissions(perms);

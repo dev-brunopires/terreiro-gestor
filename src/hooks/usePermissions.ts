@@ -77,20 +77,9 @@ export function usePermissions(profile: Profile | null): UsePermissionsResult {
     setError(null);
 
     try {
-      const { data, error } = await supabase
-        .from("current_user_permissions")
-        .select("permission");
-
-      if (error) throw error;
-
-      if (data && data.length > 0) {
-        setPermissions(data.map((d: any) => d.permission as string));
-      } else {
-        // fallback por role
-        setPermissions(rolePermissions[profile.role] ?? []);
-      }
+      // Usar permissões baseadas em role apenas
+      setPermissions(rolePermissions[profile.role] ?? []);
     } catch (e: any) {
-      // fallback em caso de erro
       setError(e?.message ?? "Erro ao carregar permissões");
       setPermissions(rolePermissions[profile.role] ?? []);
     } finally {
