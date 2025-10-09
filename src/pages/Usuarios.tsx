@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from "react"
 import { supabase } from "@/integrations/supabase/client";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { useToast } from "@/hooks/use-toast";
-import FeatureGate from "@/components/FeatureGate";
+import { FeatureGate } from "@/components/FeatureGate";
 import UpgradeCard from "@/components/UpgradeCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -667,7 +667,7 @@ export default function UsuariosPage() {
   // ===== Render =====
   return (
     <DashboardLayout title="Usuários">
-      <FeatureGate code="usuarios" fallback={<UpgradeCard needed="Usuários" />}>
+      <FeatureGate feature="usuarios" fallback={<UpgradeCard needed="Usuários" />}>
         <div className="flex items-center justify-between gap-2 mb-4">
           <div>
             <h2 className="text-xl font-semibold">Equipe do terreiro</h2>

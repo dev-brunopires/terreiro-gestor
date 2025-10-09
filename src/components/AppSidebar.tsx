@@ -16,7 +16,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useOrg } from "@/contexts/OrgContext";
-
+import FeatureGate from "@/components/FeatureGate";
 type Role = "owner" | "admin" | "viewer" | "financeiro" | "operador";
 
 const allOverview = [

@@ -84,6 +84,7 @@ type Venda = {
   metodo_pagamento?: string | null;
   membro_id?: string | null;
   numero?: number | null; // <-- novo
+  itens?: VendaItem[]; // ✅ add
 };
 
 /* ================== Helpers ================== */
@@ -356,6 +357,8 @@ export default function PDVPage() {
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [loadingOrg, setLoadingOrg] = useState<boolean>(false);
 
+  
+
   const orgId = currentOrg?.id ?? fallbackOrgId;
   // no seu schema, terreiro_id = org_id
   const terreiroId = orgId;
@@ -369,6 +372,10 @@ export default function PDVPage() {
   const [clienteDialogOpen, setClienteDialogOpen] = useState(false);
   const [clienteQuery, setClienteQuery] = useState(""); // busca por nome | matrícula
 
+  const [orgLogo, setOrgLogo] = useState<string | null>(null);
+  const [orgCNPJ, setOrgCNPJ] = useState<string | null>(null);
+  const [orgEndereco, setOrgEndereco] = useState<string | null>(null);
+  const [orgContato, setOrgContato] = useState<string | null>(null);
   // ===== Desconto
   const [descontoModo, setDescontoModo] = useState<"valor" | "percent">("valor")
   // ======= Estado principal (com persistência) =======
@@ -631,6 +638,45 @@ export default function PDVPage() {
   useEffect(() => {
     if (activeTab === "historico" && orgId) loadHistorico(orgId);
   }, [activeTab, orgId]);
+
+  const loadOrgPublicData = React.useCallback(async (oid: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("terreiros")
+        .select("id, nome, cnpj, logo_url, endereco, contato, telefone, email")
+        .eq("id", oid)
+        .maybeSingle();
+
+      if (error && (error as any)?.code !== "42703") throw error;
+
+      if (data) {
+        setFallbackOrgName(data.nome ?? null);
+        setOrgLogo(data.logo_url ?? null);
+        setOrgCNPJ(data.cnpj ?? null);
+        setOrgEndereco(data.endereco ?? null);
+
+        const contato =
+          data.contato ??
+          (([data.telefone, data.email].filter(Boolean).join(" • ")) || null);
+        setOrgContato(contato);
+        return;
+      }
+
+      const { data: d2 } = await supabase
+        .from("terreiros")
+        .select("id, nome")
+        .eq("id", oid)
+        .maybeSingle();
+
+      if (d2) setFallbackOrgName(d2.nome ?? null);
+    } catch (e) {
+      console.warn("[PDV] org public load fallback:", e);
+    }
+  }, []);
+
+useEffect(() => {
+  if (orgId) loadOrgPublicData(orgId);
+}, [orgId, loadOrgPublicData]);
 
   /* ============ Catálogo / Carrinho ============ */
   const visibleProdutos = useMemo(() => {
@@ -922,8 +968,12 @@ function abrirJanelaCupomPDV(html: string) {
 
 function gerarCupomHTMLPDV(args: {
   orgNome: string;
+  orgLogo?: string | null;
+  orgCNPJ?: string | null;
+  orgEndereco?: string | null;
+  orgContato?: string | null;
   membro?: string | null;
-  vendaNumero?: number | null;   // usamos o número da venda no cupom
+  vendaNumero?: number | null;
   metodo: string;
   itens: { nome: string; qtd: number; unit_cent: number }[];
   subtotal_cent: number;
@@ -936,78 +986,79 @@ function gerarCupomHTMLPDV(args: {
     new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" })
       .format((c || 0) / 100);
 
-  const dataHoraImpressao = new Date().toLocaleString("pt-BR");
+  const dataHora = new Date().toLocaleString("pt-BR");
 
   const linhas = args.itens
     .map((it) => {
-      const unit = fmtBRL(it.unit_cent);
       const linhaTotal = fmtBRL(it.qtd * it.unit_cent);
       return `<tr>
-        <td style="text-align:left">${it.qtd}×</td>
-        <td style="text-align:left">${(it.nome || '').toUpperCase()}</td>
-        <td style="text-align:right">${unit}</td>
+        <td style="text-align:left">${(it.nome || "").toUpperCase()}</td>
+        <td style="text-align:center">${it.qtd}</td>
         <td style="text-align:right">${linhaTotal}</td>
       </tr>`;
     })
     .join("");
 
-  const descontoLinha =
+  const linhaDesconto =
     args.desconto_cent > 0
-      ? `<div class="row"><span>Descontos</span><span>- ${fmtBRL(args.desconto_cent)}</span></div>`
+      ? `<div class="muted">Desconto: - ${fmtBRL(args.desconto_cent)}</div>`
       : "";
 
   return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
-<title>Cupom PDV</title>
+<title>Cupom</title>
 <style>
   @page { size: 80mm auto; margin: 6mm; }
   body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   .wrap { width: 80mm; max-width: 80mm; }
   .center { text-align: center; }
-  .title { font-weight: 700; margin: 6px 0; font-size: 14px; }
-  .muted { color: #444; font-size: 10px; line-height: 1.2; }
-  table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 8px 0 4px; }
-  th, td { padding: 4px 0; border-bottom: 1px dashed #999; }
-  th { text-align: left; }
-  th.num, td.num { text-align: right; }
-  .row { display:flex; justify-content:space-between; font-size: 12px; margin: 2px 0; }
-  .tot { border-top: 1px dashed #999; padding-top: 6px; margin-top: 6px; font-weight: 700; font-size: 13px; }
-  .foot { border-top: 1px dashed #999; margin-top: 10px; padding-top: 6px; font-size: 10px; text-align: center; }
+  .logo { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; margin-bottom: 4px; }
+  .title { font-weight: 700; margin: 6px 0; }
+  .muted { color: #444; font-size: 10px; line-height: 1.3; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 6px 0; }
+  th, td { padding: 4px 0; }
+  th { text-align: left; border-bottom: 1px dashed #999; }
+  tbody td { border-bottom: 1px dashed #999; }
+  .tot { border-top: 1px dashed #999; padding-top: 6px; margin-top: 4px; font-weight: 700; }
+  .foot { border-top: 1px dashed #999; margin-top: 8px; padding-top: 6px; font-size: 10px; text-align: center; }
   @media print { .no-print { display: none !important; } }
 </style>
 </head>
 <body>
   <div class="wrap">
     <div class="center">
-      <div class="title">${(args.orgNome || "Comprovante").toUpperCase()}</div>
-      <div class="muted">Impresso em: ${dataHoraImpressao}</div>
+      ${args.orgLogo ? `<img src="${args.orgLogo}" class="logo" />` : ``}
+      <div class="title">${args.orgNome || "Comprovante"}</div>
+      <div class="muted">
+        ${args.orgCNPJ ? `CNPJ: ${args.orgCNPJ}<br/>` : ``}
+        ${args.orgEndereco ? `${args.orgEndereco}<br/>` : ``}
+        ${args.orgContato ? `${args.orgContato}` : ``}
+      </div>
     </div>
 
-    <div class="muted" style="margin-top:6px">
-      ${typeof args.vendaNumero === "number" ? `Venda nº: ${args.vendaNumero}<br/>` : ``}
-      Cliente: ${args.membro || "Avulso"}<br/>
-      Método: ${args.metodo || "-"}
-    </div>
+    <div class="muted" style="margin-top:6px">Data/Hora: ${dataHora}</div>
+    ${typeof args.vendaNumero === "number" ? `<div class="muted">Venda nº: ${args.vendaNumero}</div>` : ``}
+    <div class="muted">Método: ${args.metodo || "-"}</div>
+    <div class="muted">Cliente: ${args.membro || "Avulso"}</div>
 
     <table>
       <thead>
         <tr>
-          <th style="width:36px">Qtd</th>
           <th>Item</th>
-          <th class="num" style="width:68px">Unit.</th>
-          <th class="num" style="width:72px">Total</th>
+          <th style="text-align:center">Qtd</th>
+          <th style="text-align:right">Valor</th>
         </tr>
       </thead>
       <tbody>${linhas}</tbody>
     </table>
 
-    <div class="row"><span>Subtotal</span><span>${fmtBRL(args.subtotal_cent)}</span></div>
-    ${descontoLinha}
-    <div class="row tot"><span>Total</span><span>${fmtBRL(args.total_cent)}</span></div>
-    <div class="row"><span>Pago</span><span>${fmtBRL(args.pago_cent)}</span></div>
-    ${args.troco_cent > 0 ? `<div class="row"><span>Troco</span><span>${fmtBRL(args.troco_cent)}</span></div>` : ''}
+    <div class="muted">Subtotal: ${fmtBRL(args.subtotal_cent)}</div>
+    ${linhaDesconto}
+    <div class="tot">Total: ${fmtBRL(args.total_cent)}</div>
+    <div class="muted">Pago: ${fmtBRL(args.pago_cent)}</div>
+    ${args.troco_cent > 0 ? `<div class="muted">Troco: ${fmtBRL(args.troco_cent)}</div>` : ``}
 
     <div class="foot">Obrigado pela preferência.<br/>Este documento não substitui NF-e.</div>
   </div>
@@ -1017,16 +1068,14 @@ function gerarCupomHTMLPDV(args: {
 
 
 
+
+
 function imprimirCupomPDV(
   snap: {
-    venda_id?: string;   // pode ficar, mas não vamos exibir
-    venda_numero?: number | null; // <-- novo
+    venda_id?: string;
+    venda_numero?: number | null;
     itens: { produto: { nome: string; preco_centavos: number }; quantidade: number }[];
-    subtotal: number;
-    desconto: number;
-    total: number;
-    pago: number;
-    troco: number;
+    subtotal: number; desconto: number; total: number; pago: number; troco: number;
     membro_nome?: string;
   },
   orgNome: string,
@@ -1040,8 +1089,12 @@ function imprimirCupomPDV(
 
   const html = gerarCupomHTMLPDV({
     orgNome,
+    orgLogo,       // ← vem do useState do componente
+    orgCNPJ,
+    orgEndereco,
+    orgContato,
     membro: snap.membro_nome ?? "Avulso",
-    vendaNumero: snap.venda_numero ?? null,  // <-- aqui!
+    vendaNumero: snap.venda_numero ?? null,
     metodo,
     itens,
     subtotal_cent: snap.subtotal,
@@ -1053,6 +1106,8 @@ function imprimirCupomPDV(
 
   abrirJanelaCupomPDV(html);
 }
+
+
 
 
 
@@ -1791,7 +1846,7 @@ const handleDownloadTemplateXLSX = () => {
                   <Printer className="h-4 w-4 mr-2" /> Finalizar e imprimir
                 </Button>
                 <Button className="w-full" variant="secondary" onClick={() => finishSale(false)} disabled={isFinishing || cart.length === 0}>
-                  <CreditCard className="h-4 w-4 mr-2" /> Só finalizar
+                  <CreditCard className="h-4 w-4 mr-2" /> Finalizar
                 </Button>
                 <Button className="w-full" variant="outline" onClick={clearCart} disabled={cart.length === 0}>
                   Limpar
@@ -2250,7 +2305,7 @@ const handleDownloadTemplateXLSX = () => {
 
   return (
     <DashboardLayout>
-      <FeatureGate code="pdv" fallback={<UpgradeCard needed="PDV" />}>      
+      <FeatureGate feature="pdv" fallback={<UpgradeCard needed="PDV" />}>      
       <NiceErrorBoundary>{content}</NiceErrorBoundary>
       </FeatureGate>
     </DashboardLayout>

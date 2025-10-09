@@ -75,7 +75,7 @@ export default function Mensalidades() {
   const [orgEndereco, setOrgEndereco] = useState<string>('');
   const [orgContato, setOrgContato] = useState<string>('');
   const [orgCnpj, setOrgCnpj] = useState<string>('');
-
+  const [blockedMsg, setBlockedMsg] = useState<string | null>(null);
   // busca por nome OU matrícula (somente para não-viewer)
   const [consulta, setConsulta] = useState(''); // nome ou matrícula
 
@@ -217,14 +217,15 @@ export default function Mensalidades() {
     });
   };
 
-  const carregarPorMembroId = async (idMembro: string) => {
+    const carregarPorMembroId = async (idMembro: string) => {
     try {
       setLoading(true);
+      setBlockedMsg(null);            // zera qualquer bloqueio anterior
       setRows([]);
       setSelectedIds(new Set());
       setSelectAll(false);
 
-      // dados do membro
+      // 1) dados do membro
       const { data: m, error: em } = await supabase
         .from('membros')
         .select('id, nome, matricula')
@@ -239,7 +240,25 @@ export default function Mensalidades() {
       setMembroNome(m.nome ?? '');
       setMembroMatricula(m.matricula ?? '');
 
-      // faturas (inclui pagas)
+      // 2) checar status de assinaturas do membro
+      const { data: subs, error: subErr } = await supabase
+        .from('assinaturas')
+        .select('status')
+        .eq('membro_id', idMembro)
+        .order('created_at', { ascending: false });
+      if (subErr) throw subErr;
+
+      const hasActive = (subs ?? []).some(s => s.status === 'ativa');
+      const hasPaused = (subs ?? []).some(s => s.status === 'pausada');
+
+      // Regra: se NÃO há ativa e há pausada → bloquear com mensagem
+      if (!hasActive && hasPaused) {
+        setRows([]);
+        setBlockedMsg('Assinatura pausada');
+        return; // não busca faturas
+      }
+
+      // 3) faturas (somente as que estão "abertas" pela sua regra)
       const { data, error } = await supabase
         .from('faturas')
         .select(`
@@ -251,10 +270,13 @@ export default function Mensalidades() {
           status,
           forma_pagamento,
           dt_pagamento,
-          membros:membro_id ( id, nome, matricula )
+          membros:membro_id ( id, nome, matricula, ativo ),
+          assinaturas:assinatura_id ( status )
         `)
         .eq('membro_id', idMembro)
-        .in('status', ['pendente', 'vencida', 'paga'])
+        .eq('status', 'pendente')            // só faturas pendentes
+        .eq('assinaturas.status', 'ativa')   // assinatura precisa estar ativa
+        .eq('membros.ativo', true)           // membro precisa estar ativo
         .order('dt_vencimento', { ascending: true });
       if (error) throw error;
 
@@ -627,7 +649,7 @@ export default function Mensalidades() {
 
   return (
     <DashboardLayout>
-      <FeatureGate code="membros" fallback={<UpgradeCard needed="Membros" />}>
+      <FeatureGate feature="mensalidades" fallback={<UpgradeCard needed="Mensalidades" />}>
         {/* 6) Garantir que o conteúdo da página fique por trás da navbar fixa */}
         {/* Se sua navbar do DashboardLayout usa z-50, este wrapper com z-0 resolve a sobreposição durante o scroll */}
         <div className="space-y-6 relative z-0">
@@ -873,7 +895,7 @@ export default function Mensalidades() {
                 {!loading && filtered.length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">
                     <Wallet className="h-12 w-12 mx-auto mb-2 opacity-20" />
-                    <p>Nenhuma mensalidade encontrada</p>
+                    <p>{blockedMsg ?? 'Nenhuma mensalidade encontrada'}</p>
                   </div>
                 )}
               </CardContent>

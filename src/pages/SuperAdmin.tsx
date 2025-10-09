@@ -6,7 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { useToast } from "@/hooks/use-toast";
-
+import { Eye, Mail, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,16 +65,35 @@ export type OrgContract = {
 
 export type FeatureRow = { id: string; plan_id: string; feature: string };
 
+/** Leads */
+type LeadStatus = "novo" | "em_analise" | "contatado" | "convertido" | "descartado";
+type LeadRow = {
+  id: string;
+  created_at: string;
+  nome: string;
+  email: string;
+  telefone: string | null;
+  terreiro_nome: string;
+  cidade_uf: string | null;
+  tamanho_terreiro: string | null;
+  plano: string;
+  origem: string | null;
+  status: LeadStatus;
+  notes: string | null;
+};
+
 /** Catálogo de funcionalidades (saas_plan_features.feature) */
 const ALL_FEATURES: Array<{ code: string; label: string }> = [
-  { code: "membros", label: "Membros" },
-  { code: "planos", label: "Planos" },
-  { code: "assinaturas", label: "Assinaturas" },
-  { code: "mensalidades", label: "Mensalidades" },
-  { code: "faturas", label: "Faturas" },
-  { code: "pagamentos_diversos", label: "Pagamentos diversos" },
-  { code: "relatorios", label: "Relatórios" },
-  { code: "usuarios", label: "Usuários" },
+  { code: "membros",              label: "Membros" },
+  { code: "planos",               label: "Planos" },
+  { code: "assinaturas",          label: "Assinaturas" },
+  { code: "faturas",              label: "Faturas" },
+  { code: "mensalidades",         label: "Mensalidades" },
+  { code: "pagamentos_diversos",  label: "Pagamentos diversos" },
+  { code: "relatorios",           label: "Relatórios" },
+  { code: "usuarios",             label: "Usuários" },
+  { code: "pdv",                  label: "PDV" },
+  { code: "configuracoes",        label: "Configurações" },
 ];
 
 /** Edge Functions (com variações para compat e fallback) */
@@ -106,17 +125,16 @@ const EDGE = {
     "set-org-plan",
   ],
   CREATE_USER: [
-    "superadmin-set-owner", // nova edge (promove/cria owner)
-    "create-user",          // fallback compat
+    "superadmin-set-owner",
+    "create-user",
   ],
 } as const;
 
-
-// Copia texto com fallback quando navigator.clipboard não existir / não for seguro.
+/** Copia texto com fallback quando navigator.clipboard não existir / não for seguro. */
 async function safeCopyToClipboard(text: string) {
   try {
-    if (typeof navigator !== "undefined" && navigator?.clipboard?.writeText && window?.isSecureContext) {
-      await navigator.clipboard.writeText(text);
+    if (typeof navigator !== "undefined" && (navigator as any)?.clipboard?.writeText && (window as any)?.isSecureContext) {
+      await (navigator as any).clipboard.writeText(text);
       return true;
     }
     // Fallback: textarea + execCommand
@@ -128,7 +146,6 @@ async function safeCopyToClipboard(text: string) {
     document.body.appendChild(ta);
     ta.focus();
     ta.select();
-    // iOS compat
     try { ta.setSelectionRange(0, ta.value.length); } catch {}
     const ok = document.execCommand("copy");
     document.body.removeChild(ta);
@@ -140,7 +157,6 @@ async function safeCopyToClipboard(text: string) {
   }
 }
 
-
 /** Invoca Edge e tenta extrair mensagem detalhada do response */
 async function callEdge(fnName: string, payload: any) {
   const { data, error } = await supabase.functions.invoke(fnName, { body: payload });
@@ -150,7 +166,7 @@ async function callEdge(fnName: string, payload: any) {
   let statusText = (error as any)?.context?.response?.statusText ?? "";
   let rawBody: any = null;
   let textBody = "";
-  let headers: Record<string, string> = {};
+  const headers: Record<string, string> = {};
 
   try {
     const resp: Response | undefined = (error as any)?.context?.response;
@@ -165,13 +181,14 @@ async function callEdge(fnName: string, payload: any) {
     }
   } catch { /* no-op */ }
 
-  const detail =
+  const detail = (
     (data as any)?.error ||
     rawBody?.error ||
     rawBody?.message ||
     textBody ||
     (error as any)?.message ||
-    `HTTP ${status} ${statusText || ""}`.trim();
+    (status ? `HTTP ${status} ${statusText || ""}` : "Erro desconhecido")
+  ).toString().trim();
 
   console.groupCollapsed(`[EDGE][${fnName}] non-2xx`);
   console.log("payload:", payload);
@@ -228,6 +245,9 @@ export default function SuperadminPage() {
   const [novoOwnerEmail, setNovoOwnerEmail] = useState("");
   const [novoOwnerNome, setNovoOwnerNome] = useState("");
 
+  // Lead: origem da criação (apenas esta parte é “modo antigo”)
+  const [leadSourceId, setLeadSourceId] = useState<string | null>(null);
+
   // link owner
   const [linkDlgOpen, setLinkDlgOpen] = useState(false);
   const [linkOrg, setLinkOrg] = useState<Terreiro | null>(null);
@@ -250,6 +270,15 @@ export default function SuperadminPage() {
   const [featuresPlano, setFeaturesPlano] = useState<SaasPlan | null>(null);
   const [editFeatures, setEditFeatures] = useState<string[]>([]);
 
+  // LEADS
+  const [leads, setLeads] = useState<LeadRow[]>([]);
+  const [leadsLoading, setLeadsLoading] = useState(true);
+  const [leadSearch, setLeadSearch] = useState("");
+  const [leadStatusFilter, setLeadStatusFilter] = useState<LeadStatus | "todos">("todos");
+  const [leadDlgOpen, setLeadDlgOpen] = useState(false);
+  const [leadViewing, setLeadViewing] = useState<LeadRow | null>(null);
+  const [leadNotesDraft, setLeadNotesDraft] = useState("");
+
   // contrato do org
   const [contratoDlgOpen, setContratoDlgOpen] = useState(false);
   const [contratoTerreiro, setContratoTerreiro] = useState<Terreiro | null>(null);
@@ -263,6 +292,19 @@ export default function SuperadminPage() {
     if (!allowed) return;
     void loadTerreiros();
     void loadSaasPlans();
+    void loadLeads();
+
+    // Realtime: leads
+    const ch = supabase
+      .channel("realtime-superadmin-leads")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "leads" },
+        () => { loadLeads(); }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(ch); };
   }, [allowed]);
 
   const filtered = useMemo(() => {
@@ -275,6 +317,22 @@ export default function SuperadminPage() {
       r.id.toLowerCase().startsWith(q)
     );
   }, [rows, search]);
+
+  /** LEADS: busca + filtro */
+  const filteredLeads = useMemo(() => {
+    const q = leadSearch.trim().toLowerCase();
+    return leads.filter(l => {
+      const hit =
+        l.nome.toLowerCase().includes(q) ||
+        l.email.toLowerCase().includes(q) ||
+        (l.telefone ?? "").toLowerCase().includes(q) ||
+        l.terreiro_nome.toLowerCase().includes(q) ||
+        (l.cidade_uf ?? "").toLowerCase().includes(q) ||
+        l.plano.toLowerCase().includes(q);
+      const statusOk = leadStatusFilter === "todos" ? true : l.status === leadStatusFilter;
+      return hit && statusOk;
+    });
+  }, [leads, leadSearch, leadStatusFilter]);
 
   /** LOAD: terreiros + contratos (2 passos) + contadores */
   async function loadTerreiros() {
@@ -356,12 +414,92 @@ export default function SuperadminPage() {
     }
   }
 
+  /** LEADS: load */
+  async function loadLeads() {
+    try {
+      setLeadsLoading(true);
+      const { data, error } = await supabase
+        .from("leads")
+        .select("id, created_at, nome, email, telefone, terreiro_nome, cidade_uf, tamanho_terreiro, plano, origem, status, notes")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setLeads((data ?? []) as LeadRow[]);
+    } catch (e: any) {
+      toast({ title: "Erro ao carregar leads", description: e?.message ?? "Tente novamente", variant: "destructive" });
+    } finally {
+      setLeadsLoading(false);
+    }
+  }
+
+  function openLead(row: LeadRow) {
+    setLeadViewing(row);
+    setLeadNotesDraft(row.notes ?? "");
+    setLeadDlgOpen(true);
+  }
+
+  async function setLeadStatus(row: LeadRow, status: LeadStatus) {
+    try {
+      const { error } = await supabase.from("leads").update({ status }).eq("id", row.id);
+      if (error) throw error;
+      toast({ title: "Status atualizado", description: `${row.nome} → ${status}` });
+      await loadLeads();
+      if (leadViewing?.id === row.id) {
+        setLeadViewing({ ...row, status });
+      }
+    } catch (e:any) {
+      toast({ title: "Erro ao atualizar status", description: e?.message, variant: "destructive" });
+    }
+  }
+
+  async function saveLeadNotes() {
+    if (!leadViewing) return;
+    try {
+      const { error } = await supabase.from("leads").update({ notes: leadNotesDraft }).eq("id", leadViewing.id);
+      if (error) throw error;
+      toast({ title: "Anotações salvas" });
+      setLeadDlgOpen(false);
+      await loadLeads();
+    } catch (e:any) {
+      toast({ title: "Erro ao salvar anotações", description: e?.message, variant: "destructive" });
+    }
+  }
+
+  async function deleteLead(row: LeadRow) {
+    try {
+      const { error } = await supabase.from("leads").delete().eq("id", row.id);
+      if (error) throw error;
+      toast({ title: "Lead excluído", description: row.nome });
+      await loadLeads();
+    } catch (e:any) {
+      toast({ title: "Erro ao excluir lead", description: e?.message, variant: "destructive" });
+    }
+  }
+
+  // Cria rapidamente um Terreiro a partir do lead (pré-preenche e abre seu diálogo existente)
+  async function createOrgFromLead(row: LeadRow) {
+    try {
+      setDlgOpen(true);
+      setEditing(null);
+      setNome(row.terreiro_nome);
+      setNovoOwnerEmail(row.email);
+      setNovoOwnerNome(row.nome);
+
+      // marca que esta criação veio de um lead -> ativa “modo antigo” no submit
+      setLeadSourceId(row.id);
+
+      toast({ title: "Pré-preenchido", description: "Abra o modal e clique em Salvar para criar o terreiro." });
+    } catch (e:any) {
+      toast({ title: "Falha ao preparar criação do terreiro", description: e?.message, variant: "destructive" });
+    }
+  }
+
   /** CRUD: terreiros (nome) com fallback */
   const openCreate = () => {
     setEditing(null);
     setNome("");
     setNovoOwnerEmail("");
     setNovoOwnerNome("");
+    setLeadSourceId(null); // criação normal não vem de lead
     setDlgOpen(true);
   };
   const openEdit = (t: Terreiro) => { setEditing(t); setNome(t.nome); setDlgOpen(true); };
@@ -371,9 +509,41 @@ export default function SuperadminPage() {
     try {
       if (!nome.trim()) throw new Error("Informe o nome do terreiro");
 
+      // ======== MODO ANTIGO (APENAS quando veio de LEAD) ========
+      if (!editing && leadSourceId) {
+        // 1) cria terreiro direto no PostgREST
+        const { data: ins, error: terrErr } = await supabase
+          .from("terreiros")
+          .insert({ nome: nome.trim(), email: (novoOwnerEmail?.trim() || null) })
+          .select("id")
+          .single();
+        if (terrErr) throw terrErr;
+        const createdOrgId = ins?.id as string | undefined;
+
+        // 2) opcional: marcar lead como convertido
+        try {
+          await supabase.from("leads").update({ status: "convertido" }).eq("id", leadSourceId);
+        } catch {}
+
+        toast({ title: "Terreiro criado", description: nome });
+        // limpa estado e recarrega
+        setDlgOpen(false);
+        setNome("");
+        setNovoOwnerEmail("");
+        setNovoOwnerNome("");
+        setEditing(null);
+        setLeadSourceId(null);
+        await loadTerreiros();
+        await loadLeads();
+
+        // IMPORTANTE: não segue para o fluxo novo (Edge), encerra aqui
+        return;
+      }
+      // ======== /MODO ANTIGO ========
+
       let createdOrgId: string | null = editing?.id ?? null;
 
-      // 1) Upsert do terreiro (inclui email quando criando)
+      // 1) Upsert do terreiro (inclui email quando criando) — fluxo novo
       try {
         await tryFunctions(EDGE.TERREIRO_UPSERT, {
           id: editing?.id ?? null,
@@ -410,11 +580,9 @@ export default function SuperadminPage() {
         createdOrgId = trow?.id ?? editing?.id ?? null;
       }
 
-      // 2) Se foi criação e tem e-mail de owner: cria usuário, seta como owner,
-      // grava no contrato e cria membro matricula '0'
+      // 2) Se foi criação e tem e-mail de owner: cria usuário (Edge). Se falhar, avisa e segue.
       const email = (novoOwnerEmail || "").trim().toLowerCase();
       if (!editing && createdOrgId && email) {
-        // 2.1 cria/associa owner (edge preferida)
         try {
           await tryFunctions(EDGE.CREATE_USER, {
             email,
@@ -428,16 +596,21 @@ export default function SuperadminPage() {
           if (err?.status === 409 && /user_already_in_other_org/i.test(err?.message || err?.body?.error || "")) {
             throw new Error("Este e-mail já está vinculado a outra organização.");
           }
-          throw err;
+          const msg = err?.message || err?.body?.error || "Falha ao criar/associar o owner";
+          toast({
+            title: "Terreiro criado (owner pendente)",
+            description: `${msg}. Você pode vincular o owner depois no menu "Vincular Owner".`,
+            variant: "destructive",
+          });
         }
 
-        // 2.2 garante email no terreiro
+        // garante email no terreiro
         try { await supabase.from("terreiros").update({ email }).eq("id", createdOrgId); } catch {}
 
-        // 2.3 owner_email no contrato (upsert)
+        // owner_email no contrato (upsert)
         try { await supabase.from("saas_org_contracts").upsert({ org_id: createdOrgId, owner_email: email }, { onConflict: "org_id" }); } catch {}
 
-        // 2.4 cria membro matricula '0' se não existir
+        // cria membro matricula '0' se não existir
         const { data: m0, error: m0Err } = await supabase
           .from("membros")
           .select("id")
@@ -445,20 +618,19 @@ export default function SuperadminPage() {
           .eq("terreiro_id", createdOrgId)
           .eq("matricula", "0")
           .maybeSingle();
-        if (m0Err) throw m0Err;
-
-        if (!m0?.id) {
+        if (!m0Err && !m0?.id) {
           const nomeMembro = novoOwnerNome?.trim() || "Responsável";
-          const { error: insErr } = await supabase.from("membros").insert({
-            nome: nomeMembro,
-            email: email,
-            org_id: createdOrgId,
-            terreiro_id: createdOrgId,
-            ativo: true,
-            matricula: "0",
-            data_admissao_terreiro: new Date().toISOString().slice(0, 10),
-          });
-          if (insErr) throw insErr;
+          try {
+            await supabase.from("membros").insert({
+              nome: nomeMembro,
+              email: email,
+              org_id: createdOrgId,
+              terreiro_id: createdOrgId,
+              ativo: true,
+              matricula: "0",
+              data_admissao_terreiro: new Date().toISOString().slice(0, 10),
+            });
+          } catch {}
         }
       }
 
@@ -468,6 +640,7 @@ export default function SuperadminPage() {
       setNovoOwnerEmail("");
       setNovoOwnerNome("");
       setEditing(null);
+      setLeadSourceId(null);
       await loadTerreiros();
     } catch (e: any) {
       toast({ title: "Erro ao salvar", description: e?.message, variant: "destructive" });
@@ -507,7 +680,6 @@ export default function SuperadminPage() {
     try {
       setLinkSubmitting(true);
 
-      // 1) cria/associa usuário owner
       try {
         await tryFunctions(EDGE.CREATE_USER, {
           email,
@@ -521,16 +693,14 @@ export default function SuperadminPage() {
         if (err?.status === 409 && /user_already_in_other_org/i.test(err?.message || err?.body?.error || "")) {
           throw new Error("Este e-mail já está vinculado a outra organização.");
         }
-        throw err;
+        const msg = err?.message || err?.body?.error || "Falha ao criar/associar owner";
+        toast({ title: "Erro ao vincular owner", description: msg, variant: "destructive" });
+        return;
       }
 
-      // 2) grava email no terreiro
       try { await supabase.from("terreiros").update({ email }).eq("id", linkOrg.id); } catch {}
-
-      // 3) owner_email no contrato (upsert)
       try { await supabase.from("saas_org_contracts").upsert({ org_id: linkOrg.id, owner_email: email }, { onConflict: "org_id" }); } catch {}
 
-      // 4) cria membro matricula '0' se não existir
       const { data: m0, error: m0Err } = await supabase
         .from("membros")
         .select("id")
@@ -538,20 +708,19 @@ export default function SuperadminPage() {
         .eq("terreiro_id", linkOrg.id)
         .eq("matricula", "0")
         .maybeSingle();
-      if (m0Err) throw m0Err;
-
-      if (!m0?.id) {
+      if (!m0Err && !m0?.id) {
         const nomeMembro = ownerNome?.trim() || "Responsável";
-        const { error: insErr } = await supabase.from("membros").insert({
-          nome: nomeMembro,
-          email: email,
-          org_id: linkOrg.id,
-          terreiro_id: linkOrg.id,
-          ativo: true,
-          matricula: "0",
-          data_admissao_terreiro: new Date().toISOString().slice(0, 10),
-        });
-        if (insErr) throw insErr;
+        try {
+          await supabase.from("membros").insert({
+            nome: nomeMembro,
+            email: email,
+            org_id: linkOrg.id,
+            terreiro_id: linkOrg.id,
+            ativo: true,
+            matricula: "0",
+            data_admissao_terreiro: new Date().toISOString().slice(0, 10),
+          });
+        } catch {}
       }
 
       toast({ title: "Owner vinculado", description: `Usuário ${email} agora é owner de "${linkOrg.nome}".` });
@@ -684,7 +853,7 @@ export default function SuperadminPage() {
   const openContrato = (t: Terreiro) => {
     const c = contracts[t.id] ?? null;
     setContratoTerreiro(t);
-    setContratoPlanoId(c?.plan_id ?? "__none__"); // sentinel
+    setContratoPlanoId(c?.plan_id ?? "__none__");
     setContratoInicio(c?.inicio ?? "");
     setContratoFim(c?.fim ?? "");
     setContratoStatus((c?.status as OrgContract["status"]) ?? "ativo");
@@ -699,7 +868,6 @@ export default function SuperadminPage() {
       const isNone = !contratoPlanoId || contratoPlanoId === "__none__";
 
       if (isNone) {
-        // remove contrato (sem plano)
         try {
           await tryFunctions(EDGE.SET_ORG_PLAN, {
             org_id: contratoTerreiro.id,
@@ -739,7 +907,6 @@ export default function SuperadminPage() {
   };
 
   /** utils: copiar/compartilhar access_code */
-
   const onCopyAccessCode = async (code?: string | null) => {
     if (!code) return;
     const ok = await safeCopyToClipboard(code);
@@ -771,7 +938,6 @@ export default function SuperadminPage() {
       toast({ title: "Falha ao compartilhar", description: e?.message ?? "Erro desconhecido", variant: "destructive" });
     }
   };
-
 
   if (!allowed) {
     return (
@@ -807,13 +973,137 @@ export default function SuperadminPage() {
           </div>
         </div>
 
-        {/* Filtros */}
+        {/* Filtros gerais */}
         <div className="flex items-center gap-3">
           <div className="relative w-full max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input className="pl-9" placeholder="Buscar por nome, e-mail ou código" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
         </div>
+
+        {/* ===== LEADS: caixa de gestão de leads ===== */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" /> Leads recebidos
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input className="pl-9 w-[280px]" placeholder="Buscar lead…" value={leadSearch} onChange={e => setLeadSearch(e.target.value)} />
+                </div>
+                <Select value={leadStatusFilter} onValueChange={(v:any)=>setLeadStatusFilter(v)}>
+                  <SelectTrigger className="w-[180px]"><SelectValue placeholder="Status" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="todos">Todos</SelectItem>
+                    <SelectItem value="novo">Novo</SelectItem>
+                    <SelectItem value="em_analise">Em análise</SelectItem>
+                    <SelectItem value="contatado">Contatado</SelectItem>
+                    <SelectItem value="convertido">Convertido</SelectItem>
+                    <SelectItem value="descartado">Descartado</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {leadsLoading ? "Carregando…" : `${filteredLeads.length} lead(s)`}
+              </div>
+            </div>
+
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Quando</TableHead>
+                  <TableHead>Nome / Contato</TableHead>
+                  <TableHead>Terreiro</TableHead>
+                  <TableHead>Plano</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="w-[1%]"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {leadsLoading ? (
+                  <TableRow><TableCell colSpan={6}>Carregando…</TableCell></TableRow>
+                ) : filteredLeads.length === 0 ? (
+                  <TableRow><TableCell colSpan={6}>Nenhum lead.</TableCell></TableRow>
+                ) : filteredLeads.map(l => (
+                  <TableRow key={l.id}>
+                    <TableCell className="whitespace-nowrap">
+                      {new Date(l.created_at).toLocaleString("pt-BR")}
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-medium">{l.nome}</div>
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <a href={`mailto:${l.email}`} className="inline-flex items-center gap-1 hover:underline"><Mail className="h-3.5 w-3.5" />{l.email}</a>
+                        {l.telefone ? (
+                          <a
+                            href={`https://wa.me/${l.telefone.replace(/\D/g,"")}`}
+                            target="_blank"
+                            className="inline-flex items-center gap-1 hover:underline"
+                          >
+                            <Phone className="h-3.5 w-3.5" />{l.telefone}
+                          </a>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-medium">{l.terreiro_nome}</div>
+                      <div className="text-xs text-muted-foreground">{l.cidade_uf || "—"} {l.tamanho_terreiro ? `• ${l.tamanho_terreiro}` : ""}</div>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">{l.plano}</TableCell>
+                    <TableCell>
+                      <Select value={l.status} onValueChange={(v:any)=>setLeadStatus(l, v)}>
+                        <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="novo">Novo</SelectItem>
+                          <SelectItem value="em_analise">Em análise</SelectItem>
+                          <SelectItem value="contatado">Contatado</SelectItem>
+                          <SelectItem value="convertido">Convertido</SelectItem>
+                          <SelectItem value="descartado">Descartado</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onSelect={(e)=>{e.preventDefault(); openLead(l);}}>
+                            <Eye className="h-4 w-4 mr-2" /> Detalhes / Notas
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={(e)=>{e.preventDefault(); createOrgFromLead(l);}}>
+                            <Building2 className="h-4 w-4 mr-2" /> Criar Terreiro…
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <DropdownMenuItem className="text-red-600" onSelect={(e)=>e.preventDefault()}>
+                                <Trash2 className="h-4 w-4 mr-2" /> Excluir
+                              </DropdownMenuItem>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Excluir lead de {l.nome}?</AlertDialogTitle>
+                                <AlertDialogDescription>Essa ação não pode ser desfeita.</AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                <AlertDialogAction className="bg-red-600" onClick={()=>deleteLead(l)}>Excluir</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
 
         {/* Lista de terreiros */}
         <Card>
@@ -1035,6 +1325,82 @@ export default function SuperadminPage() {
               <Button type="submit">Salvar</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* LEADS: Dialog detalhes/notas */}
+      <Dialog open={leadDlgOpen} onOpenChange={setLeadDlgOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Lead — {leadViewing?.nome}</DialogTitle>
+            <DialogDescription>
+              Recebido em {leadViewing ? new Date(leadViewing.created_at).toLocaleString("pt-BR") : "—"}
+            </DialogDescription>
+          </DialogHeader>
+
+          {leadViewing && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <Label>Contato</Label>
+                  <div className="text-sm">
+                    <a href={`mailto:${leadViewing.email}`} className="hover:underline flex gap-2 items-center">
+                      <Mail className="h-4 w-4" /> {leadViewing.email}
+                    </a>
+                    {leadViewing.telefone ? (
+                      <a
+                        href={`https://wa.me/${leadViewing.telefone.replace(/\D/g,"")}`}
+                        target="_blank"
+                        className="hover:underline flex gap-2 items-center"
+                      >
+                        <Phone className="h-4 w-4" /> {leadViewing.telefone}
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+                <div>
+                  <Label>Plano</Label>
+                  <div className="text-sm">{leadViewing.plano}</div>
+                </div>
+                <div>
+                  <Label>Terreiro</Label>
+                  <div className="text-sm">{leadViewing.terreiro_nome}</div>
+                </div>
+                <div>
+                  <Label>Cidade/UF — Tamanho</Label>
+                  <div className="text-sm">{leadViewing.cidade_uf || "—"} {leadViewing.tamanho_terreiro ? `• ${leadViewing.tamanho_terreiro}` : ""}</div>
+                </div>
+                <div>
+                  <Label>Status</Label>
+                  <Select value={leadViewing.status} onValueChange={(v:any)=> setLeadStatus(leadViewing, v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="novo">Novo</SelectItem>
+                      <SelectItem value="em_analise">Em análise</SelectItem>
+                      <SelectItem value="contatado">Contatado</SelectItem>
+                      <SelectItem value="convertido">Convertido</SelectItem>
+                      <SelectItem value="descartado">Descartado</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Anotações internas</Label>
+                <textarea
+                  className="w-full min-h-[120px] border rounded-md p-2 text-sm"
+                  value={leadNotesDraft}
+                  onChange={e=>setLeadNotesDraft(e.target.value)}
+                  placeholder="Ex.: falou no WhatsApp, pediu demo para sexta…"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={()=>setLeadDlgOpen(false)}>Fechar</Button>
+                <Button onClick={saveLeadNotes}>Salvar</Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

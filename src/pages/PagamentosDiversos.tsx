@@ -712,7 +712,7 @@ export default function PagamentosDiversos() {
 
   return (
     <DashboardLayout>
-      <FeatureGate code="pagamentos_diversos" fallback={<UpgradeCard needed="Pagamentos diversos" />}>
+      <FeatureGate feature="pagamentos_diversos" fallback={<UpgradeCard needed="Pagamentos diversos" />}>
         <div className="space-y-6">
           {/* Header */}
           <div className="flex items-center justify-between">

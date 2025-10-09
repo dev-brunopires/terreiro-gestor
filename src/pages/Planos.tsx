@@ -376,7 +376,7 @@ export default function Planos() {
 
   return (
     <DashboardLayout>
-      <FeatureGate code="planos" fallback={<UpgradeCard needed="Planos" />}>
+      <FeatureGate feature="planos" fallback={<UpgradeCard needed="Planos" />}>
         <div className="space-y-6">
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">

@@ -727,7 +727,7 @@ export default function Relatorios() {
   /* ==================== UI ==================== */
   return (
     <DashboardLayout>
-      <FeatureGate code="relatorios" fallback={<UpgradeCard needed="Relatórios" />}>
+      <FeatureGate feature="relatorios" fallback={<UpgradeCard needed="Relatórios" />}>
         <div className="space-y-6">
           {/* Header */}
           <div className="flex items-center justify-between">
