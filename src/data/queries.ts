@@ -20,3 +20,13 @@ export async function fetchPlanos(orgId: string) {
   if (error) throw error;
   return data || [];
 }
+
+export async function fetchMetodosPagamento() {
+  const { data, error } = await supabase
+    .from('metodos_pagamento' as any)
+    .select('id,slug,nome,ativo')
+    .eq('ativo', true)
+    .order('nome', { ascending: true });
+  if (error) throw error;
+  return (data as any) || [];
+}
