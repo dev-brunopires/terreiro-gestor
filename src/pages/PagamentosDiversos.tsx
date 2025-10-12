@@ -462,12 +462,12 @@ export default function PagamentosDiversos() {
       }
       if (search.trim()) {
         const q = `%${search.trim()}%`;
-        query = query.or(`descricao.ilike.${q},matricula.ilike.${q},metodo.ilike.${q},tipo.ilike.${q},observacoes.ilike.${q}`);
+        query = query.or(`descricao.ilike.${q},matricula.ilike.${q},tipo.ilike.${q},observacoes.ilike.${q}`);
       }
 
       const { data, error } = await query;
       if (error) throw error;
-      setItens((data || []) as PagDiverso[]);
+      setItens(data || []);
     } catch (e: any) {
       toast({ title: 'Erro ao carregar lançamentos', description: e?.message ?? 'Tente novamente', variant: 'destructive' });
     } finally {
@@ -557,7 +557,7 @@ export default function PagamentosDiversos() {
         tipo: toBaseTipo(form.tipo),
         descricao: normalize(form.descricao || ''),
         valor_centavos: centavos,
-        metodo: metodoFinal,
+        forma_pagamento_id: metodoFinal,
         membro_id: membroId,
         matricula: matriculaFinal,
         data: form.data || new Date().toISOString().slice(0, 10),
@@ -568,7 +568,7 @@ export default function PagamentosDiversos() {
       const { data: inserted, error } = await supabase
         .from('pagamentos_diversos')
         .insert(payload)
-        .select('id, tipo, descricao, metodo, valor_centavos, membro_id, matricula, data, created_at, observacoes');
+        .select('id, tipo, descricao, valor_centavos, membro_id, matricula, data, created_at, observacoes');
 
       if (error) throw error;
 

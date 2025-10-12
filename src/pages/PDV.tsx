@@ -329,16 +329,15 @@ async function registrarPagamentoPOS(args: {
 
 // dentro de registrarPagamentoPOS(...)
   const { error } = await supabase.from("pagamentos_diversos").insert({
-  org_id,
   terreiro_id,
   membro_id,
   tipo: "loja",
   descricao: `PDV: venda ${venda_id}`,
-  metodo,
+  forma_pagamento_id: metodo,
   valor_centavos: total_centavos,
   usuario_operacao: "pdv",
   observacoes: "POS",
-  pos_venda_id: venda_id,   // <<-- novo
+  pos_venda_id: venda_id,
 });
 
   if (error) throw error;
