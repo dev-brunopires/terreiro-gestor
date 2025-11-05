@@ -37,7 +37,7 @@ export default function Onboarding() {
 
       // A RPC pode retornar uma string (id) ou um objeto com { id }
       const terreiroId: string | null =
-        typeof data === 'string' ? data : (data?.id ?? null);
+        typeof data === 'string' ? data : ((data as any)?.id ?? null);
 
       // 2) Vincula o usuário logado ao terreiro como OWNER (profiles.org_id/role)
       const { data: auth } = await supabase.auth.getUser();

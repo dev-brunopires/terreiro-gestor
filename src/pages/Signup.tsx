@@ -42,7 +42,7 @@ export default function Signup() {
       // 1) Cria a conta
       const { error: signErr } = await signUp(email.trim().toLowerCase(), password, nome.trim());
       if (signErr) {
-        setFormError(signErr.message ?? 'Erro ao criar conta.');
+        setFormError(typeof signErr === 'string' ? signErr : (signErr as any)?.message ?? 'Erro ao criar conta.');
         return;
       }
 

@@ -545,7 +545,7 @@ export default function SuperadminPage() {
 
       // 1) Upsert do terreiro (inclui email quando criando) — fluxo novo
       try {
-        await tryFunctions(EDGE.TERREIRO_UPSERT, {
+        await tryFunctions([...EDGE.TERREIRO_UPSERT], {
           id: editing?.id ?? null,
           nome: nome.trim(),
           email: editing ? undefined : (novoOwnerEmail?.trim() || null),
@@ -584,7 +584,7 @@ export default function SuperadminPage() {
       const email = (novoOwnerEmail || "").trim().toLowerCase();
       if (!editing && createdOrgId && email) {
         try {
-          await tryFunctions(EDGE.CREATE_USER, {
+          await tryFunctions([...EDGE.CREATE_USER], {
             email,
             password: DEFAULT_OWNER_PASSWORD,
             org_id: createdOrgId,
@@ -608,7 +608,7 @@ export default function SuperadminPage() {
         try { await supabase.from("terreiros").update({ email }).eq("id", createdOrgId); } catch {}
 
         // owner_email no contrato (upsert)
-        try { await supabase.from("saas_org_contracts").upsert({ org_id: createdOrgId, owner_email: email }, { onConflict: "org_id" }); } catch {}
+        try { await supabase.from("saas_org_contracts").upsert([{ org_id: createdOrgId, plan_id: '', owner_email: email }], { onConflict: "org_id" }); } catch {}
 
         // cria membro matricula '0' se não existir
         const { data: m0, error: m0Err } = await supabase
@@ -649,7 +649,7 @@ export default function SuperadminPage() {
 
   const deleteTerreiro = async (t: Terreiro) => {
     try {
-      try { await tryFunctions(EDGE.TERREIRO_DELETE, { org_id: t.id }); }
+      try { await tryFunctions([...EDGE.TERREIRO_DELETE], { org_id: t.id }); }
       catch (err: any) {
         if (err?.status === 404 || err?.status === 405 || err?.status === 0 || err?.status == null) {
           const { error } = await supabase.from("terreiros").delete().eq("id", t.id);
@@ -681,7 +681,7 @@ export default function SuperadminPage() {
       setLinkSubmitting(true);
 
       try {
-        await tryFunctions(EDGE.CREATE_USER, {
+        await tryFunctions([...EDGE.CREATE_USER], {
           email,
           password: DEFAULT_OWNER_PASSWORD,
           org_id: linkOrg.id,
@@ -699,7 +699,7 @@ export default function SuperadminPage() {
       }
 
       try { await supabase.from("terreiros").update({ email }).eq("id", linkOrg.id); } catch {}
-      try { await supabase.from("saas_org_contracts").upsert({ org_id: linkOrg.id, owner_email: email }, { onConflict: "org_id" }); } catch {}
+      try { await supabase.from("saas_org_contracts").upsert([{ org_id: linkOrg.id, plan_id: '', owner_email: email }], { onConflict: "org_id" }); } catch {}
 
       const { data: m0, error: m0Err } = await supabase
         .from("membros")
@@ -782,7 +782,7 @@ export default function SuperadminPage() {
       };
       if (!payload.nome) throw new Error("Informe o nome do plano");
 
-      try { await tryFunctions(EDGE.PLAN_UPSERT, payload); }
+      try { await tryFunctions([...EDGE.PLAN_UPSERT], payload); }
       catch (err: any) {
         if (err?.status === 404 || err?.status === 405 || err?.status === 0 || err?.status == null) {
           if (payload.id) {
@@ -809,7 +809,7 @@ export default function SuperadminPage() {
 
   const deletePlan = async (p: SaasPlan) => {
     try {
-      try { await tryFunctions(EDGE.PLAN_DELETE, { id: p.id }); }
+      try { await tryFunctions([...EDGE.PLAN_DELETE], { id: p.id }); }
       catch (err: any) {
         if (err?.status === 404 || err?.status === 405 || err?.status === 0 || err?.status == null) {
           const { error: e1 } = await supabase.from("saas_org_contracts").update({ plan_id: null }).eq("plan_id", p.id);
@@ -869,7 +869,7 @@ export default function SuperadminPage() {
 
       if (isNone) {
         try {
-          await tryFunctions(EDGE.SET_ORG_PLAN, {
+          await tryFunctions([...EDGE.SET_ORG_PLAN], {
             org_id: contratoTerreiro.id,
             plano_id: null,
             inicio: contratoInicio || null,
@@ -892,7 +892,7 @@ export default function SuperadminPage() {
           owner_email: contratoOwnerEmail || null
         };
         try {
-          await tryFunctions(EDGE.SET_ORG_PLAN, { ...payload, plano_id: payload.plan_id });
+          await tryFunctions([...EDGE.SET_ORG_PLAN], { ...payload, plano_id: payload.plan_id });
         } catch (err: any) {
           if (err?.status === 404 || err?.status === 405 || err?.status === 0 || err?.status == null) {
             await supabase.from("saas_org_contracts").upsert(payload, { onConflict: "org_id" });

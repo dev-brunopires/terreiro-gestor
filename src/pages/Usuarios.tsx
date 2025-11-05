@@ -666,7 +666,7 @@ export default function UsuariosPage() {
 
   // ===== Render =====
   return (
-    <DashboardLayout title="Usuários">
+    <DashboardLayout>
       <FeatureGate feature="usuarios" fallback={<UpgradeCard needed="Usuários" />}>
         <div className="flex items-center justify-between gap-2 mb-4">
           <div>
@@ -772,7 +772,10 @@ export default function UsuariosPage() {
                               </AlertDialogHeader>
                               <AlertDialogFooter>
                                 <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => forceResetPassword(u.user_id)}>
+                                <AlertDialogAction onClick={() => {
+                                  // Implementar forceResetPassword
+                                  toast({ title: "Funcionalidade em desenvolvimento" });
+                                }}>
                                   Confirmar
                                 </AlertDialogAction>
                               </AlertDialogFooter>

@@ -249,7 +249,7 @@ function SectionPerfil() {
       if (refreshTimer.current) window.clearInterval(refreshTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.avatar_url, user?.user_metadata, user?.id]);
+  }, [user?.user_metadata, user?.id]);
 
   const salvarPerfil = async () => {
     if (!user) return;
