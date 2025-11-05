@@ -54,7 +54,6 @@ interface PagamentoDetalhado {
   id: string;
   pago_em: string;
   valor_centavos: number;
-  metodo?: string | null;
   fatura_id: string;
   refer?: string | null;
   membro_matricula?: string | null;
@@ -197,7 +196,6 @@ export default function Relatorios() {
           id,
           valor_centavos,
           pago_em,
-          metodo,
           faturas!inner(
             id,
             refer,
@@ -256,7 +254,7 @@ export default function Relatorios() {
       // === Diversos — data é DATE
       let diversosQuery = supabase
         .from('pagamentos_diversos')
-        .select('id, data, tipo, descricao, metodo, valor_centavos, matricula')
+        .select('id, data, tipo, descricao, valor_centavos, matricula, formas_pagamento:forma_pagamento_id(nome)')
         .gte('data', startISO)
         .lt('data', endExclusive)
         .order('data', { ascending: false })
@@ -356,7 +354,6 @@ export default function Relatorios() {
         id: p.id,
         pago_em: p.pago_em,
         valor_centavos: toInt(p.valor_centavos),
-        metodo: p.metodo ?? null,
         fatura_id: p.faturas?.id,
         refer: p.faturas?.refer ?? null,
         membro_matricula: p.faturas?.membros?.matricula ?? null,
@@ -371,7 +368,7 @@ export default function Relatorios() {
         data: d.data,
         tipo: d.tipo,
         descricao: d.descricao,
-        metodo: d.metodo,
+        metodo: d.formas_pagamento?.nome ?? null,
         valor_centavos: toInt(d.valor_centavos),
         matricula: d.matricula,
       }));
@@ -518,7 +515,6 @@ export default function Relatorios() {
           ws.addRow([
             new Date(p.pago_em),
             toInt(p.valor_centavos) / 100,
-            p.metodo || '',
             p.refer || '',
             p.membro_matricula || '',
             p.membro_nome || '',
@@ -643,12 +639,11 @@ export default function Relatorios() {
       } else if (modoLista === 'pagamentos') {
         const lista = pagamentos;
         body = [
-          [{ text: 'Pago em', style: 'th' }, { text: 'Valor', style: 'th', alignment: 'right' }, { text: 'Método', style: 'th' },
+          [{ text: 'Pago em', style: 'th' }, { text: 'Valor', style: 'th', alignment: 'right' },
            { text: 'Ref', style: 'th' }, { text: 'Matrícula', style: 'th' }, { text: 'Membro', style: 'th' }, { text: 'Plano', style: 'th' }],
           ...lista.map((p, idx) => ([
             { text: new Date(p.pago_em).toLocaleDateString('pt-BR'), style: idx % 2 ? 'tdAlt' : 'td' },
             { text: formatCurrency(p.valor_centavos), alignment: 'right', style: idx % 2 ? 'tdAlt' : 'td' },
-            { text: p.metodo || '-', style: idx % 2 ? 'tdAlt' : 'td' },
             { text: p.refer || '-', style: idx % 2 ? 'tdAlt' : 'td' },
             { text: p.membro_matricula || '-', style: idx % 2 ? 'tdAlt' : 'td' },
             { text: p.membro_nome || '-', style: idx % 2 ? 'tdAlt' : 'td' },
@@ -955,7 +950,6 @@ export default function Relatorios() {
                     <TableRow className="border-border/50">
                       <TableHead>Pago em</TableHead>
                       <TableHead>Valor</TableHead>
-                      <TableHead>Método</TableHead>
                       <TableHead>Ref</TableHead>
                       <TableHead>Matrícula</TableHead>
                       <TableHead>Membro</TableHead>
@@ -967,7 +961,6 @@ export default function Relatorios() {
                       <TableRow key={p.id} className="border-border/50">
                         <TableCell>{new Date(p.pago_em).toLocaleDateString('pt-BR')}</TableCell>
                         <TableCell className="font-semibold text-secondary">{formatCurrency(p.valor_centavos)}</TableCell>
-                        <TableCell>{p.metodo || '-'}</TableCell>
                         <TableCell className="font-mono">{p.refer || '-'}</TableCell>
                         <TableCell className="font-mono">{p.membro_matricula || '-'}</TableCell>
                         <TableCell className="font-medium">{p.membro_nome || '-'}</TableCell>

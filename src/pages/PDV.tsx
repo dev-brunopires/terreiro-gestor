@@ -328,17 +328,26 @@ async function registrarPagamentoPOS(args: {
   const { venda_id, venda_numero, org_id, terreiro_id, membro_id, total_centavos, metodo } = args;
 
 // dentro de registrarPagamentoPOS(...)
+  // Buscar ID da forma de pagamento pelo código/nome
+  const { data: formaData } = await supabase
+    .from("formas_pagamento")
+    .select("id")
+    .ilike("codigo", metodo)
+    .maybeSingle();
+
+  const forma_pagamento_id = formaData?.id || null;
+
   const { error } = await supabase.from("pagamentos_diversos").insert({
-  terreiro_id,
-  membro_id,
-  tipo: "loja",
-  descricao: `PDV: venda ${venda_id}`,
-  forma_pagamento_id: metodo,
-  valor_centavos: total_centavos,
-  usuario_operacao: "pdv",
-  observacoes: "POS",
-  pos_venda_id: venda_id,
-});
+    terreiro_id,
+    membro_id,
+    tipo: "loja",
+    descricao: `PDV: venda ${venda_id}`,
+    forma_pagamento_id,
+    valor_centavos: total_centavos,
+    usuario_operacao: "pdv",
+    observacoes: "POS",
+    pos_venda_id: venda_id,
+  });
 
   if (error) throw error;
 }

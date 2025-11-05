@@ -203,7 +203,7 @@ export default function Dashboard() {
       // == Últimos diversos – sem estorno e do seu org
       let ultDiversosQ = supabase
         .from('pagamentos_diversos')
-        .select('id, data, valor_centavos, metodo, tipo, descricao, matricula, membro_id, estornado')
+        .select('id, data, valor_centavos, tipo, descricao, matricula, membro_id, estornado, formas_pagamento:forma_pagamento_id(nome)')
         .eq('terreiro_id', orgId)
         .or('estornado.is.false,estornado.is.null')
         .order('data', { ascending: false })
@@ -306,7 +306,6 @@ export default function Dashboard() {
             tipo: 'mensalidade',
             data: p.pago_em,
             valor_centavos: toInt(p.valor_centavos),
-            metodo: p.metodo ?? null,
             descricao: `Ref ${p?.faturas?.refer ?? ''}`,
             refer: p?.faturas?.refer ?? null,
             membro_nome: p?.faturas?.membros?.nome ?? null,
@@ -484,7 +483,7 @@ export default function Dashboard() {
                       <span className="text-sm">{formatCurrency(p.valor_centavos)}</span>
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      {new Date(p.data).toLocaleDateString('pt-BR')} • {p.metodo ?? '-'}
+                      {new Date(p.data).toLocaleDateString('pt-BR')}
                     </div>
                     <div className="mt-1 text-sm">
                       {p.tipo === 'mensalidade'
@@ -513,7 +512,6 @@ export default function Dashboard() {
                       <TableHead>Data</TableHead>
                       <TableHead>Matrícula</TableHead>
                       <TableHead>Membro/Descrição</TableHead>
-                      <TableHead>Método</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Valor</TableHead>
                     </TableRow>
@@ -533,7 +531,6 @@ export default function Dashboard() {
                             ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
                             : (p.descricao || 'Diverso') + (p.membro_nome ? ` • ${p.membro_nome}` : '')}
                         </TableCell>
-                        <TableCell>{p.metodo ?? '-'}</TableCell>
                         <TableCell>
                           <Badge variant={badgeVariantByStatus(p.status)}>
                             {p.status === 'reembolsado' ? 'Reembolsado' : p.status === 'cancelado' ? 'Cancelado' : 'Pago'}
@@ -691,7 +688,7 @@ export default function Dashboard() {
                     <span className="text-sm">{formatCurrency(p.valor_centavos)}</span>
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {new Date(p.data).toLocaleDateString('pt-BR')} • {p.metodo ?? '-'}
+                    {new Date(p.data).toLocaleDateString('pt-BR')}
                   </div>
                   <div className="mt-1 text-sm">
                     {p.tipo === 'mensalidade'
@@ -714,38 +711,36 @@ export default function Dashboard() {
             {/* desktop table */}
             <div className="hidden md:block overflow-x-auto">
               <Table>
-                <TableHeader>
-                  <TableRow className="border-border/50">
-                    <TableHead>Tipo</TableHead>
-                    <TableHead>Data</TableHead>
-                    <TableHead>Matrícula</TableHead>
-                    <TableHead>Membro/Descrição</TableHead>
-                    <TableHead>Método</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Valor</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {ultimosPagamentos.map((p) => (
-                    <TableRow key={`${p.tipo}-${p.id}`} className="border-border/50">
-                      <TableCell className="font-medium">
-                        <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
-                          {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{new Date(p.data).toLocaleDateString('pt-BR')}</TableCell>
-                      <TableCell>{p.matricula ?? '-'}</TableCell>
-                      <TableCell>
-                        {p.tipo === 'mensalidade'
-                          ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
-                          : (p.descricao || 'Diverso') + (p.membro_nome ? ` • ${p.membro_nome}` : '')}
-                      </TableCell>
-                      <TableCell>{p.metodo ?? '-'}</TableCell>
-                      <TableCell>
-                        <Badge variant={badgeVariantByStatus(p.status)}>
-                          {p.status === 'reembolsado' ? 'Reembolsado' : p.status === 'cancelado' ? 'Cancelado' : 'Pago'}
-                        </Badge>
-                      </TableCell>
+              <TableHeader>
+                <TableRow className="border-border/50">
+                  <TableHead>Tipo</TableHead>
+                  <TableHead>Data</TableHead>
+                  <TableHead>Matrícula</TableHead>
+                  <TableHead>Membro/Descrição</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Valor</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ultimosPagamentos.map((p) => (
+                  <TableRow key={`${p.tipo}-${p.id}`} className="border-border/50">
+                    <TableCell className="font-medium">
+                      <Badge variant={p.tipo === 'mensalidade' ? 'default' : 'secondary'}>
+                        {p.tipo === 'mensalidade' ? 'Mensalidade' : 'Diverso'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{new Date(p.data).toLocaleDateString('pt-BR')}</TableCell>
+                    <TableCell>{p.matricula ?? '-'}</TableCell>
+                    <TableCell>
+                      {p.tipo === 'mensalidade'
+                        ? (p.membro_nome || 'N/A') + (p.refer ? ` • Ref ${p.refer}` : '')
+                        : (p.descricao || 'Diverso') + (p.membro_nome ? ` • ${p.membro_nome}` : '')}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={badgeVariantByStatus(p.status)}>
+                        {p.status === 'reembolsado' ? 'Reembolsado' : p.status === 'cancelado' ? 'Cancelado' : 'Pago'}
+                      </Badge>
+                    </TableCell>
                       <TableCell className="font-medium text-right">
                         {formatCurrency(p.valor_centavos)}
                       </TableCell>
