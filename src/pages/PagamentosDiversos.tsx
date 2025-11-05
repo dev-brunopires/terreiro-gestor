@@ -904,7 +904,7 @@ export default function PagamentosDiversos() {
                   <TableBody>
                     {itensFiltrados.map(item => (
                       <TableRow key={item.id} className="border-border/50">
-                        <TableCell>{new Date(item.data).toLocaleDateString('pt-BR')}</TableCell>
+                        <TableCell>{new Date(item.data + 'T12:00:00').toLocaleDateString('pt-BR')}</TableCell>
                         <TableCell>
                           <Badge variant={item.tipo === 'doacao' ? 'default' : item.tipo === 'compra' ? 'secondary' : 'outline'}>
                             {item.tipo}

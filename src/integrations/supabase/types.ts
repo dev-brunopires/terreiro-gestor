@@ -3265,18 +3265,9 @@ export type Database = {
         }
         Returns: undefined
       }
-      _get_actor_user_id: {
-        Args: { p_org_id: string }
-        Returns: string
-      }
-      _jwt_org_id: {
-        Args: Record<PropertyKey, never>
-        Returns: string
-      }
-      _last_day: {
-        Args: { p_date: string }
-        Returns: string
-      }
+      _get_actor_user_id: { Args: { p_org_id: string }; Returns: string }
+      _jwt_org_id: { Args: never; Returns: string }
+      _last_day: { Args: { p_date: string }; Returns: string }
       _next_due_dates: {
         Args: { dia_venc: number; n?: number; start_date: string }
         Returns: {
@@ -3314,10 +3305,7 @@ export type Database = {
         }
         Returns: undefined
       }
-      brl_to_centavos: {
-        Args: { v: number }
-        Returns: number
-      }
+      brl_to_centavos: { Args: { v: number }; Returns: number }
       bulk_cria_assinaturas_faltantes: {
         Args: { p_org_id: string; p_plano_id: string }
         Returns: {
@@ -3344,20 +3332,14 @@ export type Database = {
           updated_count: number
         }[]
       }
-      create_terreiro: {
-        Args: { nome_terreiro: string }
-        Returns: string
-      }
-      current_org_id: {
-        Args: Record<PropertyKey, never>
-        Returns: string
-      }
+      create_terreiro: { Args: { nome_terreiro: string }; Returns: string }
+      current_org_id: { Args: never; Returns: string }
       debita_estoque_se_disponivel: {
         Args: { p_org: string; p_produto_id: string; p_qtd: number }
         Returns: boolean
       }
       debug_jwt: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: {
           org_id_text: string
           org_id_uuid: string
@@ -3368,14 +3350,8 @@ export type Database = {
         Args: { p_org: string; p_produto: string; p_qtd: number }
         Returns: undefined
       }
-      due_10_next_month: {
-        Args: { p_competencia: string }
-        Returns: string
-      }
-      ensure_default_org: {
-        Args: { p_nome?: string }
-        Returns: string
-      }
+      due_10_next_month: { Args: { p_competencia: string }; Returns: string }
+      ensure_default_org: { Args: { p_nome?: string }; Returns: string }
       ensure_member_active_subscription: {
         Args: { p_membro_id: string; p_org_id: string }
         Returns: undefined
@@ -3401,32 +3377,23 @@ export type Database = {
         }
         Returns: string
       }
-      fn_safe_jwt_org_id: {
-        Args: Record<PropertyKey, never>
-        Returns: string
-      }
-      fp_resolve_id: {
-        Args: { p_texto: string }
-        Returns: string
-      }
-      gen_faturas_for_assinatura: {
-        Args:
-          | { p_assinatura_id: string; p_meses?: number }
-          | {
+      fn_safe_jwt_org_id: { Args: never; Returns: string }
+      fp_resolve_id: { Args: { p_texto: string }; Returns: string }
+      gen_faturas_for_assinatura:
+        | {
+            Args: { p_assinatura_id: string; p_meses?: number }
+            Returns: undefined
+          }
+        | {
+            Args: {
               p_assinatura_id: string
               p_meses?: number
               p_override_plano_id?: string
             }
-        Returns: undefined
-      }
-      gen_short_code: {
-        Args: Record<PropertyKey, never>
-        Returns: string
-      }
-      generate_access_code: {
-        Args: Record<PropertyKey, never>
-        Returns: string
-      }
+            Returns: undefined
+          }
+      gen_short_code: { Args: never; Returns: string }
+      generate_access_code: { Args: never; Returns: string }
       generate_missing_assinaturas_for_org: {
         Args: {
           p_gerar_fat?: boolean
@@ -3462,70 +3429,23 @@ export type Database = {
           membro_id: string
         }[]
       }
-      generate_terreiro_code: {
-        Args: Record<PropertyKey, never>
-        Returns: string
-      }
-      gerar_faturas_mes: {
-        Args: { ano: number; mes: number }
-        Returns: number
-      }
-      get_default_plano_id: {
-        Args: { p_org_id: string }
-        Returns: string
-      }
-      get_terreiro_id_by_code: {
-        Args: { p_code: string }
-        Returns: string
-      }
-      get_user_org_id: {
-        Args: Record<PropertyKey, never>
-        Returns: string
-      }
-      gtrgm_compress: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      gtrgm_decompress: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      gtrgm_in: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      gtrgm_options: {
-        Args: { "": unknown }
-        Returns: undefined
-      }
-      gtrgm_out: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
+      generate_terreiro_code: { Args: never; Returns: string }
+      gerar_faturas_mes: { Args: { ano: number; mes: number }; Returns: number }
+      get_default_plano_id: { Args: { p_org_id: string }; Returns: string }
+      get_terreiro_id_by_code: { Args: { p_code: string }; Returns: string }
+      get_user_org_id: { Args: never; Returns: string }
       has_org_role: {
         Args: { allowed_roles: string[]; target_org: string }
         Returns: boolean
       }
-      in_org: {
-        Args: { target_org: string }
-        Returns: boolean
-      }
+      in_org: { Args: { target_org: string }; Returns: boolean }
       inc_estoque: {
         Args: { p_org: string; p_produto: string; p_qtd: number }
         Returns: undefined
       }
-      is_org_admin: {
-        Args: { target_org: string }
-        Returns: boolean
-      }
-      is_superadmin: {
-        Args: Record<PropertyKey, never>
-        Returns: boolean
-      }
-      jwt_org_id: {
-        Args: Record<PropertyKey, never>
-        Returns: string
-      }
+      is_org_admin: { Args: { target_org: string }; Returns: boolean }
+      is_superadmin: { Args: never; Returns: boolean }
+      jwt_org_id: { Args: never; Returns: string }
       membros_sem_assinatura_ativa: {
         Args: { p_org_id: string }
         Returns: {
@@ -3542,58 +3462,21 @@ export type Database = {
           nome: string
         }[]
       }
-      my_org_id: {
-        Args: Record<PropertyKey, never>
-        Returns: string
-      }
-      next_matricula: {
-        Args: { p_terreiro_id: string }
-        Returns: string
-      }
-      next_pos_num: {
-        Args: { p_org: string }
-        Returns: number
-      }
-      next_pos_venda_num: {
-        Args: { p_org?: string }
-        Returns: number
-      }
-      normalize_metodo: {
-        Args: { m: string }
-        Returns: string
-      }
-      normalize_tipo: {
-        Args: { t: string }
-        Returns: string
-      }
-      pos_next_number: {
-        Args: { p_org: string }
-        Returns: number
-      }
-      regen_terreiro_code: {
-        Args: { p_org_id: string }
-        Returns: string
-      }
+      my_org_id: { Args: never; Returns: string }
+      next_matricula: { Args: { p_terreiro_id: string }; Returns: string }
+      next_pos_num: { Args: { p_org: string }; Returns: number }
+      next_pos_venda_num: { Args: { p_org?: string }; Returns: number }
+      normalize_metodo: { Args: { m: string }; Returns: string }
+      normalize_tipo: { Args: { t: string }; Returns: string }
+      pos_next_number: { Args: { p_org: string }; Returns: number }
+      regen_terreiro_code: { Args: { p_org_id: string }; Returns: string }
       reopen_future_canceled_invoices: {
         Args: { p_membro_id: string; p_org_id: string; p_user?: string }
         Returns: number
       }
-      resolve_join_code: {
-        Args: { p_code: string }
-        Returns: string
-      }
-      set_limit: {
-        Args: { "": number }
-        Returns: number
-      }
-      show_limit: {
-        Args: Record<PropertyKey, never>
-        Returns: number
-      }
-      show_trgm: {
-        Args: { "": string }
-        Returns: string[]
-      }
+      resolve_join_code: { Args: { p_code: string }; Returns: string }
+      show_limit: { Args: never; Returns: number }
+      show_trgm: { Args: { "": string }; Returns: string[] }
       sql_increment_produto_estoque: {
         Args: { p_delta: number; p_org_id: string; p_produto_id: string }
         Returns: undefined
@@ -3623,10 +3506,7 @@ export type Database = {
         }
         Returns: undefined
       }
-      user_in_org: {
-        Args: { member_org: string }
-        Returns: boolean
-      }
+      user_in_org: { Args: { member_org: string }; Returns: boolean }
     }
     Enums: {
       [_ in never]: never
