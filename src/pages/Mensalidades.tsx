@@ -47,7 +47,6 @@ interface MensalidadeRow {
   total_a_pagar_centavos: number; // valor - desconto
   status_db: 'pendente' | 'vencida' | 'paga';
   ui_status: UIStatus;
-  forma_pagamento?: string | null;
   dt_pagamento?: string | null;
 }
 
@@ -211,7 +210,6 @@ export default function Mensalidades() {
         total_a_pagar_centavos: Math.max(0, (f.valor_centavos ?? 0) - desconto),
         status_db: f.status,
         ui_status,
-        forma_pagamento: f.forma_pagamento ?? null,
         dt_pagamento: f.dt_pagamento ?? null,
       };
     });
@@ -268,7 +266,6 @@ export default function Mensalidades() {
           valor_centavos,
           vl_desconto_centavos,
           status,
-          forma_pagamento,
           dt_pagamento,
           membros:membro_id ( id, nome, matricula, ativo ),
           assinaturas:assinatura_id ( status )
@@ -451,7 +448,6 @@ export default function Mensalidades() {
           status: 'paga',
           dt_pagamento: agoraISO,
           vl_pago_centavos: 0,
-          forma_pagamento: metodo,
         })
         .in('id', selected.map((s) => s.id));
       if (updErr) throw updErr;
@@ -583,7 +579,7 @@ export default function Mensalidades() {
   // REIMPRIMIR cupom de uma fatura já paga
   const reimprimirCupom = (row: MensalidadeRow) => {
     try {
-      const html = gerarCupomHTML([row], row.forma_pagamento || '-', row.dt_pagamento || undefined);
+      const html = gerarCupomHTML([row], '-', row.dt_pagamento || undefined);
       abrirJanelaCupom(html);
     } catch (e: any) {
       console.error(e);
@@ -621,7 +617,6 @@ export default function Mensalidades() {
         .update({
           status: vencida,
           dt_pagamento: null,
-          forma_pagamento: null,
           vl_pago_centavos: null
         })
         .eq('id', row.id);

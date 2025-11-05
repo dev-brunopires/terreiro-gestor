@@ -58,7 +58,6 @@ type Fatura = {
   uiStatus: "aberta" | "paga" | "atrasada" | "cancelada" | "pausada";
   dt_pagamento?: string | null;
   vl_pago_centavos?: number | null;
-  forma_pagamento?: string | null;
   membro: { nome: string | null; matricula?: string | null };
   created_at: string;
   membro_id: string;
@@ -190,7 +189,7 @@ export default function Faturas() {
       .select(
         `
           id, refer, dt_vencimento, valor_centavos, vl_desconto_centavos,
-          status, dt_pagamento, vl_pago_centavos, forma_pagamento, created_at,
+          status, dt_pagamento, vl_pago_centavos, created_at,
           org_id, membro_id, assinatura_id,
           membros:membro_id ( nome, matricula ),
           assinaturas:assinatura_id ( status )
@@ -215,7 +214,6 @@ export default function Faturas() {
         uiStatus: dbStatusToUi(f.status),
         dt_pagamento: f.dt_pagamento ?? null,
         vl_pago_centavos: f.vl_pago_centavos ?? null,
-        forma_pagamento: f.forma_pagamento ?? null,
         created_at: f.created_at,
         membro: { nome: f.membros?.nome ?? null, matricula: f.membros?.matricula ?? null },
         membro_id: f.membro_id,
@@ -259,7 +257,7 @@ export default function Faturas() {
         .select(
           `
             id, refer, dt_vencimento, valor_centavos, vl_desconto_centavos,
-            status, dt_pagamento, vl_pago_centavos, forma_pagamento, created_at,
+            status, dt_pagamento, vl_pago_centavos, created_at,
             org_id, membro_id, assinatura_id,
             membros:membro_id ( nome, matricula ),
             assinaturas:assinatura_id ( status )
@@ -281,7 +279,6 @@ export default function Faturas() {
           uiStatus: dbStatusToUi(f.status),
           dt_pagamento: f.dt_pagamento ?? null,
           vl_pago_centavos: f.vl_pago_centavos ?? null,
-          forma_pagamento: f.forma_pagamento ?? null,
           created_at: f.created_at,
           membro: { nome: f.membros?.nome ?? null, matricula: f.membros?.matricula ?? null },
           membro_id: f.membro_id,
@@ -299,7 +296,7 @@ export default function Faturas() {
       .select(
         `
           id, refer, dt_vencimento, valor_centavos, vl_desconto_centavos,
-          status, dt_pagamento, vl_pago_centavos, forma_pagamento, created_at,
+          status, dt_pagamento, vl_pago_centavos, created_at,
           org_id, membro_id, assinatura_id,
           membros:membro_id ( nome, matricula ),
           assinaturas:assinatura_id ( status )
@@ -321,7 +318,6 @@ export default function Faturas() {
         uiStatus: dbStatusToUi(f.status),
         dt_pagamento: f.dt_pagamento ?? null,
         vl_pago_centavos: f.vl_pago_centavos ?? null,
-        forma_pagamento: f.forma_pagamento ?? null,
         created_at: f.created_at,
         membro: { nome: f.membros?.nome ?? null, matricula: f.membros?.matricula ?? null },
         membro_id: f.membro_id,
@@ -1078,7 +1074,6 @@ export default function Faturas() {
                                 <span className="text-xs text-muted-foreground">
                                   {new Date(f.dt_pagamento).toLocaleDateString("pt-BR")}
                                 </span>
-                                <span className="text-xs text-muted-foreground">{f.forma_pagamento}</span>
                               </div>
                             ) : (
                               "—"
@@ -1155,7 +1150,6 @@ export default function Faturas() {
                               <div className="text-xs text-muted-foreground">
                                 {new Date(fatura.dt_pagamento).toLocaleDateString("pt-BR")}
                               </div>
-                              <div className="text-xs text-muted-foreground">{fatura.forma_pagamento}</div>
                             </div>
                           ) : (
                             "—"
