@@ -327,6 +327,7 @@ export default function Assinaturas() {
       terreiro_id: org_id,
       valor_centavos: valorCent,
       dt_vencimento: dt,
+      data_vencimento: dt,
       refer: referFromISO(dt),
       status: "pendente" as const,
     }));
@@ -367,9 +368,10 @@ export default function Assinaturas() {
         membro_id: membroId,
         plano_id: planoId,
         org_id: orgId,
-        terreiro_id: OrgId,
+        terreiro_id: orgId,
         valor_centavos: valorCent,
         dt_vencimento: dt,
+        data_vencimento: dt,
         refer: referFromISO(dt),
         status: "pendente" as const,
       }));

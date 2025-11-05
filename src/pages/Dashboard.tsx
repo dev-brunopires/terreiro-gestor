@@ -1,6 +1,4 @@
 // src/pages/Dashboard.tsx
-// (A linha abaixo é opcional; remova se não usar)
-import { fetchDashboard } from "@/data/queries"; // ou "@/queries" se for o seu arquivo
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -89,7 +87,7 @@ const badgeVariantByStatus = (s?: UltimoPagamento['status']) =>
 
 export default function Dashboard() {
   const { toast } = useToast();
-  const { orgId, profile, loading: orgLoading } = useOrg();
+  const { orgId, loading: orgLoading } = useOrg();
 
   // Carrega role/membro_id direto do banco (para não depender de shape do useOrg)
   const profileQ = useQuery<ProfileExtra>({
@@ -115,7 +113,7 @@ export default function Dashboard() {
     refetchOnWindowFocus: false,
   });
 
-  const isViewer = (profileQ.data?.role ?? profile?.role ?? 'operador') === 'viewer';
+  const isViewer = (profileQ.data?.role ?? 'operador') === 'viewer';
   const membroIdViewer = isViewer ? (profileQ.data?.membro_id ?? null) : null;
 
   // Query principal do dashboard
@@ -370,11 +368,10 @@ export default function Dashboard() {
 
     // cache forte pra não refazer ao voltar de outra rota/aba:
     staleTime: Infinity,
-    cacheTime: 1000 * 60 * 30, // 30 min
+    gcTime: 1000 * 60 * 30, // 30 min (novo nome no v5)
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: false,
-    keepPreviousData: true,
   });
 
   // Skeletons de carregamento

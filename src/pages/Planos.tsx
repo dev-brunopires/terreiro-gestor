@@ -132,7 +132,6 @@ export default function Planos() {
     queryKey: ["planos", orgId, searchTerm],
     enabled: !!orgId,
     queryFn: () => fetchPlanos(orgId!, searchTerm),
-    keepPreviousData: true,
     staleTime: 5 * 60_000,          // 5 minutos
     refetchOnWindowFocus: false,    // não refaz ao focar
     refetchOnMount: false,          // mantém cache ao trocar de tab
@@ -172,7 +171,12 @@ export default function Planos() {
           try {
             const { data: count, error: rpcErr } = await supabase.rpc(
               "apply_plano_to_open_faturas",
-              { p_plano_id: payload.id }
+              { 
+                p_plano_id: payload.id,
+                p_assinatura_id: payload.id,
+                p_membro_id: payload.id,
+                p_org_id: payload.terreiro_id
+              }
             );
             if (rpcErr) {
               console.warn("apply_plano_to_open_faturas falhou:", rpcErr.message);
@@ -197,12 +201,13 @@ export default function Planos() {
         }
       } else {
         // insert
-        const { error } = await supabase.from("planos").insert({
+        const { error } = await supabase.from("planos").insert([{
           nome: payload.nome,
           valor_centavos: payload.valor_centavos,
           dia_vencimento: payload.dia_vencimento,
           terreiro_id: payload.terreiro_id,
-        });
+          org_id: payload.terreiro_id,
+        }]);
         if (error) throw error;
         toast({
           title: "Plano cadastrado",
@@ -339,10 +344,11 @@ export default function Planos() {
       const desconto = parseReaisToCentavos(linkForm.desconto_reais);
       const payload = {
         terreiro_id: selectedPlanoToLink.terreiro_id,
+        org_id: selectedPlanoToLink.terreiro_id,
         membro_id: linkForm.membro_id,
         plano_id: selectedPlanoToLink.id,
-        desconto_centavos: desconto,
-        observacao: linkForm.observacao?.trim() || null,
+        inicio: new Date().toISOString().slice(0, 10),
+        status: 'ativa' as const,
       };
 
       if (!payload.membro_id) {
@@ -354,7 +360,7 @@ export default function Planos() {
         return;
       }
 
-      const { error } = await supabase.from("assinaturas").insert(payload);
+      const { error } = await supabase.from("assinaturas").insert([payload]);
       if (error) throw error;
 
       toast({

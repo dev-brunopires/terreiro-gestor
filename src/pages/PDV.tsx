@@ -107,7 +107,7 @@ function safeRange(ws: XLSX.WorkSheet): XLSX.Range {
 
 // ✅ helper para criar uma sheet com cabeçalho (se a lista estiver vazia)
 function sheetWithHeaders<T extends object>(rows: T[], headers: string[]) {
-  if (rows.length > 0) return XLSX.utils.json_to_sheet(rows, { origin: 0 });
+  if (rows.length > 0) return XLSX.utils.json_to_sheet(rows);
 
   // cria só o cabeçalho quando não há dados
   const ws = XLSX.utils.aoa_to_sheet([headers]);
@@ -348,7 +348,7 @@ async function registrarPagamentoPOS(args: {
 export default function PDVPage() {
   const { toast } = useToast();
   const { session } = useAuth();
-  const { currentOrg } = useOrg();
+  const { orgId: contextOrgId } = useOrg();
 
   // fallback org pelo profile
   const [fallbackOrgId, setFallbackOrgId] = useState<string | null>(null);
@@ -358,10 +358,10 @@ export default function PDVPage() {
 
   
 
-  const orgId = currentOrg?.id ?? fallbackOrgId;
+  const orgId = contextOrgId ?? fallbackOrgId;
   // no seu schema, terreiro_id = org_id
   const terreiroId = orgId;
-  const orgName = currentOrg?.nome ?? fallbackOrgName ?? undefined;
+  const orgName = fallbackOrgName ?? undefined;
 
   const [produtos, setProdutos] = useState<Produto[]>([]);
   const [categorias, setCategorias] = useState<Categoria[]>([]);
@@ -493,7 +493,7 @@ export default function PDVPage() {
 
   /* ============ Fallback de org ============ */
   useEffect(() => {
-    if (currentOrg?.id || fallbackOrgId || !session?.user?.id) return;
+    if (contextOrgId || fallbackOrgId || !session?.user?.id) return;
     setLoadingOrg(true);
     (async () => {
       try {
@@ -524,10 +524,10 @@ export default function PDVPage() {
           variant: "destructive",
         });
       } finally {
-        setLoadingOrg(false);
-      }
+      setLoadingOrg(false);
+    }
     })();
-  }, [currentOrg?.id, fallbackOrgId, session?.user?.id, toast]);
+  }, [contextOrgId, fallbackOrgId, session?.user?.id, toast]);
 
   /* ============ Loads ============ */
   const loadAll = async (oid: string) => {
@@ -642,7 +642,7 @@ export default function PDVPage() {
     try {
       const { data, error } = await supabase
         .from("terreiros")
-        .select("id, nome, cnpj, logo_url, endereco, contato, telefone, email")
+        .select("id, nome, cnpj, logo_url, endereco, telefone, email, whatsapp, site, bairro, cidade, estado, cep")
         .eq("id", oid)
         .maybeSingle();
 
@@ -652,12 +652,18 @@ export default function PDVPage() {
         setFallbackOrgName(data.nome ?? null);
         setOrgLogo(data.logo_url ?? null);
         setOrgCNPJ(data.cnpj ?? null);
-        setOrgEndereco(data.endereco ?? null);
+        
+        const enderecoFmt = [
+          data.endereco,
+          data.bairro,
+          data.cidade && data.estado ? `${data.cidade}/${data.estado}` : data.cidade || data.estado,
+          data.cep
+        ].filter(Boolean).join(' • ');
+        setOrgEndereco(enderecoFmt || null);
 
-        const contato =
-          data.contato ??
-          (([data.telefone, data.email].filter(Boolean).join(" • ")) || null);
-        setOrgContato(contato);
+        const contatoFmt = [data.telefone, data.whatsapp, data.email, data.site]
+          .filter(Boolean).join(' • ');
+        setOrgContato(contatoFmt || null);
         return;
       }
 
@@ -1463,7 +1469,7 @@ const handleDownloadTemplateXLSX = () => {
     },
   ];
 
-  const ws = XLSX.utils.json_to_sheet(exampleRows, { origin: 0 });
+  const ws = XLSX.utils.json_to_sheet(exampleRows);
   const range = safeRange(ws);
 
   ws["!autofilter"] = { ref: XLSX.utils.encode_range(range) };

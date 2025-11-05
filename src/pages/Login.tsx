@@ -105,7 +105,8 @@ export default function Login() {
       // 2) Autentica
       const { error } = await signIn(email, password);
       if (error) {
-        setFormError(error.message ?? 'Falha ao entrar. Verifique suas credenciais.');
+        const errorMsg = typeof error === 'string' ? error : (error as any)?.message ?? 'Falha ao entrar. Verifique suas credenciais.';
+        setFormError(errorMsg);
         setLoading(false);
         return;
       }

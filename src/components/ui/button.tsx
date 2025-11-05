@@ -27,10 +27,15 @@ const buttonVariants = cva(
           "bg-transparent border-neutral-300 text-primary " +
           "hover:bg-primary hover:text-primary-foreground hover:border-transparent",
 
-        // “fantasma”/ghost com fundo claro; hover roxo
+        // "fantasma"/ghost com fundo claro; hover roxo
         ghost:
           "bg-neutral-50 border-transparent text-neutral-800 " +
           "hover:bg-primary hover:text-primary-foreground",
+
+        // secundário com estilo neutro
+        secondary:
+          "bg-neutral-100 border-neutral-200 text-neutral-700 " +
+          "hover:bg-neutral-200",
 
         // destrutivo (mantém semântico, mas ainda padronizado)
         destructive:

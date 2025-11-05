@@ -465,9 +465,18 @@ export default function PagamentosDiversos() {
         query = query.or(`descricao.ilike.${q},matricula.ilike.${q},tipo.ilike.${q},observacoes.ilike.${q}`);
       }
 
-      const { data, error } = await query;
+      const { data, error } = await query
+        .select(`
+          *,
+          formas_pagamento:forma_pagamento_id (nome)
+        `);
       if (error) throw error;
-      setItens(data || []);
+      
+      const mapped = (data || []).map((item: any) => ({
+        ...item,
+        metodo: item.formas_pagamento?.nome || null
+      }));
+      setItens(mapped);
     } catch (e: any) {
       toast({ title: 'Erro ao carregar lançamentos', description: e?.message ?? 'Tente novamente', variant: 'destructive' });
     } finally {
