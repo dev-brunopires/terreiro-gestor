@@ -431,23 +431,23 @@ export default function Mensalidades() {
       // snapshot para o cupom ANTES de atualizar/recaregar
       setLastPaidSnapshot(selected);
 
-      // 1) inserir pagamentos (um por fatura)
-      const pagamentos = selected.map((r) => ({
-        fatura_id: r.id,
-        valor_centavos: r.total_a_pagar_centavos,
-        metodo,
-      }));
+      // Buscar ID da forma de pagamento
+      const { data: formaData } = await supabase
+        .from('formas_pagamento')
+        .select('id')
+        .or(`codigo.ilike.${metodo},nome.ilike.${metodo}`)
+        .maybeSingle();
 
-      const { error: insErr } = await supabase.from('pagamentos').insert(pagamentos);
-      if (insErr) throw insErr;
+      const forma_pagamento_id = formaData?.id || null;
 
-      // 2) atualizar faturas para 'paga'
+      // Atualizar faturas para 'paga' com a forma de pagamento
       const { error: updErr } = await supabase
         .from('faturas')
         .update({
           status: 'paga',
           dt_pagamento: agoraISO,
           vl_pago_centavos: 0,
+          forma_pagamento_id: forma_pagamento_id,
         })
         .in('id', selected.map((s) => s.id));
       if (updErr) throw updErr;

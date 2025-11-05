@@ -561,12 +561,21 @@ export default function PagamentosDiversos() {
         }
       }
 
+      // Buscar ID da forma de pagamento
+      const { data: formaData } = await supabase
+        .from('formas_pagamento')
+        .select('id')
+        .or(`codigo.ilike.${metodoFinal},nome.ilike.${metodoFinal}`)
+        .maybeSingle();
+
+      const forma_pagamento_id = formaData?.id || null;
+
       const payload = {
         terreiro_id: oid,
         tipo: toBaseTipo(form.tipo),
         descricao: normalize(form.descricao || ''),
         valor_centavos: centavos,
-        forma_pagamento_id: metodoFinal,
+        forma_pagamento_id: forma_pagamento_id,
         membro_id: membroId,
         matricula: matriculaFinal,
         data: form.data || new Date().toISOString().slice(0, 10),
