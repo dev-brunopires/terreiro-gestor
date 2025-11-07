@@ -12,9 +12,14 @@ import {
   Drum,
   Leaf,
   Star,
-  CheckCircle,
   Menu,
   X,
+  Calendar,
+  FileText,
+  TrendingUp,
+  Bell,
+  Settings,
+  Zap,
 } from "lucide-react";
 
 /** ====== Tipos ====== */
@@ -47,9 +52,63 @@ const PLANS: { name: PlanKey; price: string; features: string[]; highlight?: boo
   },
 ];
 
-/** ====== Util: estilo padrão de botão (borda roxa + hover roxo) ====== */
-const BTN_PURPLE =
-  "border border-purple-600 text-purple-600 hover:bg-purple-600 hover:text-white";
+/** ====== Funcionalidades expandidas ====== */
+const FEATURES = [
+  {
+    icon: <Users className="h-8 w-8" />,
+    title: "Gestão de Membros",
+    desc: "Cadastre e organize filhos de santo, frequentadores e visitantes com facilidade.",
+    color: "from-purple-500 to-purple-600",
+  },
+  {
+    icon: <CreditCard className="h-8 w-8" />,
+    title: "Controle Financeiro",
+    desc: "Gerencie mensalidades, doações, pagamentos diversos e PDV integrado.",
+    color: "from-green-500 to-green-600",
+  },
+  {
+    icon: <BarChart3 className="h-8 w-8" />,
+    title: "Relatórios Avançados",
+    desc: "Visualize a evolução financeira com gráficos claros e exportação para Excel/PDF.",
+    color: "from-blue-500 to-blue-600",
+  },
+  {
+    icon: <Calendar className="h-8 w-8" />,
+    title: "Gestão de Assinaturas",
+    desc: "Controle de planos, renovações automáticas e histórico completo.",
+    color: "from-pink-500 to-pink-600",
+  },
+  {
+    icon: <FileText className="h-8 w-8" />,
+    title: "Faturas & Notas",
+    desc: "Emissão e controle de faturas com rastreamento de status e vencimentos.",
+    color: "from-orange-500 to-orange-600",
+  },
+  {
+    icon: <TrendingUp className="h-8 w-8" />,
+    title: "Dashboard Inteligente",
+    desc: "Visão 360° do terreiro com métricas em tempo real e insights estratégicos.",
+    color: "from-indigo-500 to-indigo-600",
+  },
+  {
+    icon: <Bell className="h-8 w-8" />,
+    title: "Notificações",
+    desc: "Alertas de vencimentos, pagamentos recebidos e eventos importantes.",
+    color: "from-yellow-500 to-yellow-600",
+  },
+  {
+    icon: <Shield className="h-8 w-8" />,
+    title: "Segurança Total",
+    desc: "Proteção de dados com criptografia, backup automático e controle de acesso.",
+    color: "from-red-500 to-red-600",
+  },
+  {
+    icon: <Settings className="h-8 w-8" />,
+    title: "Configurações Flexíveis",
+    desc: "Personalize o sistema conforme as necessidades do seu terreiro.",
+    color: "from-teal-500 to-teal-600",
+  },
+];
 
 /** ====== Error Boundary simples ====== */
 function ErrorBoundary({ children }: { children: React.ReactNode }) {
@@ -79,7 +138,7 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-white text-gray-900">
+    <div className="min-h-screen flex flex-col bg-gradient-to-b from-background to-muted/20">
       <Header onOpenHire={openHire} />
 
       <ErrorBoundary>
@@ -87,79 +146,124 @@ const Index = () => {
           {loading ? (
             <div className="min-h-[60vh] flex items-center justify-center">
               <div className="animate-pulse text-center">
-                <div className="w-16 h-16 bg-purple-200 rounded-full mx-auto mb-4" />
-                <div className="w-32 h-4 bg-gray-300 rounded mx-auto" />
+                <div className="w-16 h-16 bg-primary/20 rounded-full mx-auto mb-4" />
+                <div className="w-32 h-4 bg-muted rounded mx-auto" />
               </div>
             </div>
           ) : (
             <>
               {/* Hero */}
-              <section className="flex flex-col items-center text-center py-20 px-6">
-                <h2 className="text-5xl md:text-6xl font-extrabold tracking-tight mb-6">
-                  Gestão Espiritual <span className="text-purple-600">com Axé</span>
-                </h2>
-                <p className="text-lg text-gray-600 max-w-2xl mb-10">
-                  Traga organização e harmonia para sua casa espiritual. Uma plataforma feita sob medida
-                  para terreiros de Umbanda e Candomblé.
-                </p>
-                <div className="flex gap-4">
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    className={BTN_PURPLE}
-                    onClick={() => openHire(prefPlan)}
-                  >
-                    Contratar plano
-                  </Button>
-                  <Button size="lg" asChild variant="outline" className={BTN_PURPLE}>
-                    <Link to="/login">Já tenho conta</Link>
-                  </Button>
-                </div>
-              </section>
-
-              {/* Features */}
-              <section id="features" className="py-20 bg-gray-50">
-                <div className="max-w-6xl mx-auto px-6 text-center">
-                  <h3 className="text-3xl font-bold mb-12">Funcionalidades que trazem equilíbrio</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    <Feature icon={<Users className="h-8 w-8 text-purple-600" />} title="Gestão de Membros" desc="Cadastre e organize filhos de santo e frequentadores." />
-                    <Feature icon={<CreditCard className="h-8 w-8 text-green-600" />} title="Controle Financeiro" desc="Mensalidades, doações e saídas, tudo em ordem." />
-                    <Feature icon={<BarChart3 className="h-8 w-8 text-pink-500" />} title="Relatórios Claros" desc="Veja a evolução financeira com transparência." />
-                    <Feature icon={<Shield className="h-8 w-8 text-blue-500" />} title="Proteção de Dados" desc="Segurança total das informações do terreiro." />
-                    <Feature icon={<Drum className="h-8 w-8 text-yellow-600" />} title="Tradição + Tecnologia" desc="Respeito às raízes, com inovação no dia a dia." />
-                    <Feature icon={<Leaf className="h-8 w-8 text-green-500" />} title="Sustentabilidade" desc="Ferramenta digital, menos papel, mais natureza." />
+              <section className="relative flex flex-col items-center text-center py-24 md:py-32 px-6 overflow-hidden">
+                <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-accent/5 pointer-events-none" />
+                <div className="relative z-10 max-w-4xl mx-auto">
+                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium mb-6 animate-fade-in">
+                    <Zap className="h-4 w-4" />
+                    Gestão Espiritual Moderna
+                  </div>
+                  <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 bg-gradient-to-r from-foreground via-primary to-foreground bg-clip-text text-transparent animate-fade-in">
+                    Meu Axé
+                  </h1>
+                  <p className="text-xl md:text-2xl text-muted-foreground max-w-2xl mx-auto mb-10 animate-fade-in">
+                    A plataforma completa para gestão de terreiros de Umbanda e Candomblé.
+                    <span className="block mt-2 text-base">
+                      Organize membros, finanças e rotinas com tecnologia que respeita a tradição.
+                    </span>
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-in">
+                    <Button
+                      size="lg"
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg hover:shadow-xl transition-all"
+                      onClick={() => openHire(prefPlan)}
+                    >
+                      Começar Agora
+                    </Button>
+                    <Button size="lg" asChild variant="outline">
+                      <Link to="/login">Acessar Sistema</Link>
+                    </Button>
                   </div>
                 </div>
               </section>
 
-              {/* Pricing */}
-              <section id="pricing" className="py-20">
-                <div className="max-w-5xl mx-auto px-6 text-center">
-                  <h3 className="text-3xl font-bold mb-12">Planos para cada terreiro</h3>
-                  <div className="grid md:grid-cols-3 gap-8">
-                    {PLANS.map((p) => (
-                      <Plan
-                        key={p.name}
-                        name={p.name}
-                        price={p.price}
-                        features={p.features}
-                        highlight={p.highlight}
-                        onHire={() => openHire(p.name)}
-                      />
+              {/* Features Grid */}
+              <section id="features" className="py-20 px-6">
+                <div className="max-w-7xl mx-auto">
+                  <div className="text-center mb-16">
+                    <h2 className="text-4xl md:text-5xl font-bold mb-4">
+                      Tudo que seu terreiro precisa
+                    </h2>
+                    <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+                      Uma plataforma completa com todas as ferramentas essenciais para gestão espiritual e administrativa
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {FEATURES.map((feature, idx) => (
+                      <FeatureCard key={idx} {...feature} delay={idx * 0.1} />
                     ))}
                   </div>
                 </div>
               </section>
 
-              {/* Reviews */}
-              <section id="reviews" className="py-20 bg-gray-50">
-                <div className="max-w-6xl mx-auto px-6 text-center">
-                  <h3 className="text-3xl font-bold mb-12">O que nossos usuários dizem</h3>
-                  <div className="grid md:grid-cols-3 gap-8">
-                    <Review name="Mãe Joana" role="Dirigente de Terreiro" text="Agora consigo organizar mensalidades e cadastros sem papelada. Axé!" />
-                    <Review name="Pai Carlos" role="Babalorixá" text="O sistema trouxe clareza financeira, me sinto mais seguro na gestão." />
-                    <Review name="Ana Clara" role="Filha de Santo" text="Adorei ver tudo digital, moderno e respeitoso com a tradição." />
+              {/* Stats Section */}
+              <section className="py-20 bg-gradient-to-r from-primary/10 via-accent/10 to-primary/10">
+                <div className="max-w-6xl mx-auto px-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
+                    <div className="p-6">
+                      <div className="text-5xl font-bold text-primary mb-2">100%</div>
+                      <div className="text-muted-foreground">Digital e Seguro</div>
+                    </div>
+                    <div className="p-6">
+                      <div className="text-5xl font-bold text-primary mb-2">24/7</div>
+                      <div className="text-muted-foreground">Acesso Contínuo</div>
+                    </div>
+                    <div className="p-6">
+                      <div className="text-5xl font-bold text-primary mb-2">∞</div>
+                      <div className="text-muted-foreground">Possibilidades</div>
+                    </div>
                   </div>
+                </div>
+              </section>
+
+              {/* Reviews */}
+              <section id="reviews" className="py-20 px-6">
+                <div className="max-w-6xl mx-auto text-center">
+                  <h3 className="text-4xl font-bold mb-4">Confiança que vem da comunidade</h3>
+                  <p className="text-lg text-muted-foreground mb-12">Veja o que nossos usuários têm a dizer</p>
+                  <div className="grid md:grid-cols-3 gap-8">
+                    <Review 
+                      name="Mãe Joana" 
+                      role="Dirigente de Terreiro" 
+                      text="Agora consigo organizar mensalidades e cadastros sem papelada. O sistema é intuitivo e respeitoso com nossa tradição." 
+                    />
+                    <Review 
+                      name="Pai Carlos" 
+                      role="Babalorixá" 
+                      text="O sistema trouxe clareza financeira que eu nunca tive. Os relatórios são claros e me ajudam a tomar decisões melhores." 
+                    />
+                    <Review 
+                      name="Ana Clara" 
+                      role="Filha de Santo" 
+                      text="Adorei ver tudo digital, moderno e ao mesmo tempo respeitoso com a tradição. Facilita muito a vida de todos." 
+                    />
+                  </div>
+                </div>
+              </section>
+
+              {/* CTA Final */}
+              <section className="py-20 px-6 bg-gradient-to-br from-primary/5 to-accent/5">
+                <div className="max-w-4xl mx-auto text-center">
+                  <h3 className="text-4xl md:text-5xl font-bold mb-6">
+                    Pronto para modernizar seu terreiro?
+                  </h3>
+                  <p className="text-lg text-muted-foreground mb-8 max-w-2xl mx-auto">
+                    Entre em contato e descubra como podemos ajudar na gestão do seu espaço sagrado
+                  </p>
+                  <Button
+                    size="lg"
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg hover:shadow-xl transition-all"
+                    onClick={() => openHire(prefPlan)}
+                  >
+                    Solicitar Contato
+                  </Button>
                 </div>
               </section>
             </>
@@ -167,8 +271,10 @@ const Index = () => {
         </main>
       </ErrorBoundary>
 
-      <footer className="py-10 border-t text-center text-sm text-gray-500">
-        {new Date().getFullYear()} Meu Axé — Com fé e organização
+      <footer className="py-10 border-t bg-card text-center text-sm text-muted-foreground">
+        <div className="max-w-6xl mx-auto px-6">
+          <p>{new Date().getFullYear()} Meu Axé — Tecnologia com respeito à tradição</p>
+        </div>
       </footer>
 
       {/* Modal Contratar/Solicitar Plano */}
@@ -179,7 +285,7 @@ const Index = () => {
   );
 };
 
-/** ====== Header (navbar bonita + blur + sombra ao rolar + mobile) ====== */
+/** ====== Header (navbar moderna com blur) ====== */
 function Header({ onOpenHire }: { onOpenHire: (p?: PlanKey) => void }) {
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
@@ -195,34 +301,31 @@ function Header({ onOpenHire }: { onOpenHire: (p?: PlanKey) => void }) {
   return (
     <header
       className={[
-        "sticky top-0 z-40 backdrop-blur supports-[backdrop-filter]:bg-white/60",
-        scrolled ? "bg-white/80 shadow-sm border-b" : "bg-white/40",
+        "sticky top-0 z-40 backdrop-blur supports-[backdrop-filter]:bg-background/60 transition-all",
+        scrolled ? "bg-background/80 shadow-sm border-b" : "bg-background/40",
       ].join(" ")}
     >
       <div className="max-w-7xl mx-auto flex items-center justify-between px-4 md:px-8 py-4">
         <Link to="/" className="flex items-center gap-3 group">
           <img
-            src="/logo.png" // ✅ coloque sua logo em public/logo.png
+            src="/logo.png"
             alt="Logo - Meu Axé"
-            className="h-9 w-auto object-contain"
+            className="h-9 w-auto object-contain transition-transform group-hover:scale-105"
           />
         </Link>
 
         {/* Desktop nav */}
         <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
-          <a href="#features" className="hover:text-purple-700 transition-colors">Funcionalidades</a>
-          <a href="#pricing" className="hover:text-purple-700 transition-colors">Planos</a>
-          <a href="#reviews" className="hover:text-purple-700 transition-colors">Avaliações</a>
+          <a href="#features" className="hover:text-primary transition-colors">Funcionalidades</a>
+          <a href="#reviews" className="hover:text-primary transition-colors">Avaliações</a>
         </nav>
 
         {/* Ações */}
         <div className="hidden md:flex gap-3">
-          <Button asChild variant="outline" className={BTN_PURPLE}>
+          <Button asChild variant="outline">
             <Link to="/login">Entrar</Link>
           </Button>
           <Button
-            variant="outline"
-            className={BTN_PURPLE}
             onClick={() => onOpenHire("Controle Profissional")}
           >
             Contratar
@@ -241,19 +344,17 @@ function Header({ onOpenHire }: { onOpenHire: (p?: PlanKey) => void }) {
 
       {/* Mobile drawer */}
       {open && (
-        <div className="md:hidden border-t bg-white">
+        <div className="md:hidden border-t bg-background">
           <nav className="flex flex-col px-4 py-3 text-sm">
             <a href="#features" onClick={close} className="py-2">Funcionalidades</a>
-            <a href="#pricing" onClick={close} className="py-2">Planos</a>
             <a href="#reviews" onClick={close} className="py-2">Avaliações</a>
           </nav>
           <div className="flex gap-3 px-4 pb-4">
-            <Button asChild variant="outline" className={`flex-1 ${BTN_PURPLE}`}>
+            <Button asChild variant="outline" className="flex-1">
               <Link to="/login" onClick={close}>Entrar</Link>
             </Button>
             <Button
-              variant="outline"
-              className={`flex-1 ${BTN_PURPLE}`}
+              className="flex-1"
               onClick={() => { onOpenHire("Controle Profissional"); close(); }}
             >
               Contratar
@@ -265,49 +366,31 @@ function Header({ onOpenHire }: { onOpenHire: (p?: PlanKey) => void }) {
   );
 }
 
-/** ====== Cards ====== */
-function Feature({ icon, title, desc }: { icon: React.ReactNode; title: string; desc: string }) {
-  return (
-    <Card className="p-6 text-center border bg-white shadow-sm hover:shadow-md transition">
-      <div className="flex justify-center mb-4">{icon}</div>
-      <h4 className="font-semibold text-lg mb-2">{title}</h4>
-      <p className="text-sm text-gray-600">{desc}</p>
-    </Card>
-  );
-}
-
-function Plan({
-  name,
-  price,
-  features,
-  highlight,
-  onHire,
-}: {
-  name: PlanKey;
-  price: string;
-  features: string[];
-  highlight?: boolean;
-  onHire: () => void;
+/** ====== Feature Card Moderna ====== */
+function FeatureCard({ 
+  icon, 
+  title, 
+  desc, 
+  color,
+  delay 
+}: { 
+  icon: React.ReactNode; 
+  title: string; 
+  desc: string;
+  color: string;
+  delay: number;
 }) {
   return (
-    <Card
-      className={`p-8 border transition transform hover:-translate-y-2 hover:shadow-xl ${
-        highlight ? "border-purple-600 shadow-lg scale-105" : "border-gray-200"
-      }`}
+    <Card 
+      className="group relative p-6 border hover:border-primary/50 transition-all duration-300 hover:shadow-lg overflow-hidden"
+      style={{ animationDelay: `${delay}s` }}
     >
-      <h4 className="text-xl font-bold mb-2">{name}</h4>
-      <p className="text-3xl font-extrabold mb-6">{price}/mês</p>
-      <ul className="space-y-2 mb-6 text-sm text-gray-600 text-left">
-        {features.map((f, i) => (
-          <li key={i} className="flex items-center gap-2">
-            <CheckCircle className="h-4 w-4 text-purple-600" />
-            {f}
-          </li>
-        ))}
-      </ul>
-      <Button variant="outline" className={`w-full ${BTN_PURPLE}`} onClick={onHire}>
-        Solicitar plano
-      </Button>
+      <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-br ${color} opacity-0 group-hover:opacity-10 blur-2xl transition-opacity duration-500`} />
+      <div className={`inline-flex p-3 rounded-lg bg-gradient-to-br ${color} text-white mb-4 shadow-md`}>
+        {icon}
+      </div>
+      <h4 className="font-bold text-lg mb-2 group-hover:text-primary transition-colors">{title}</h4>
+      <p className="text-sm text-muted-foreground leading-relaxed">{desc}</p>
     </Card>
   );
 }
@@ -599,13 +682,12 @@ function HireModal({
           {ok && <p className="text-sm text-green-600">{ok}</p>}
 
           <div className="flex gap-3 pt-2">
-            <Button type="button" variant="outline" onClick={onClose} className={`flex-1 ${BTN_PURPLE}`}>
+            <Button type="button" variant="outline" onClick={onClose} className="flex-1">
               Cancelar
             </Button>
             <Button
               type="submit"
-              variant="outline"
-              className={`flex-1 ${BTN_PURPLE}`}
+              className="flex-1"
               disabled={sending}
             >
               {sending ? "Enviando..." : "Enviar pedido"}
