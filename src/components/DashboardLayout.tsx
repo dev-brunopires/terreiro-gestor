@@ -77,13 +77,13 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
         <SidebarInset className="min-h-screen bg-background">
           {/* HEADER */}
-          <header className="sticky top-1 z-40 h-17 border-b border-border bg-card/60 backdrop-blur supports-[backdrop-filter]:bg-card/50">
+          <header className="sticky top-0 z-40 border-b border-border bg-card/60 backdrop-blur supports-[backdrop-filter]:bg-card/50">
             <div className="mx-auto w-full max-w-7xl">
-              <div className="h-16 flex items-center gap-3 px-4 md:px-6">
-                <SidebarTrigger className="h-8 w-8 rounded-md border hover:bg-muted" />
-                <Separator orientation="vertical" className="h-6" />
+              <div className="h-14 sm:h-16 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 md:px-6">
+                <SidebarTrigger className="h-8 w-8 shrink-0 rounded-md border hover:bg-muted" />
+                <Separator orientation="vertical" className="h-5 sm:h-6 hidden sm:block" />
                 <div className="flex-1 min-w-0">
-                  <h1 className="text-lg font-semibold leading-none truncate">Terreiro Gestor</h1>
+                  <h1 className="text-base sm:text-lg font-semibold leading-none truncate">Terreiro Gestor</h1>
                   {sectionTitle && (
                     <p className="text-xs text-muted-foreground mt-1 truncate">{sectionTitle}</p>
                   )}
@@ -114,7 +114,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
           {/* MAIN */}
           <main className="flex-1 bg-gradient-to-br from-background to-muted/20">
-            <div className="mx-auto w-full max-w-7xl px-6 py-6">
+            <div className="mx-auto w-full max-w-7xl px-3 py-4 sm:px-4 md:px-6 md:py-6">
               {neededFeature ? (
                 <FeatureGate
                   feature={neededFeature}
