@@ -84,34 +84,67 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // ---- monta sessão + listener ----
   useEffect(() => {
     let mounted = true;
+    let initialSessionLoaded = false;
+
     const init = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!mounted) return;
+        initialSessionLoaded = true;
         setSession(session ?? null);
         setUser(session?.user ?? null);
         setAuthLoading(false);
       } catch {
-        if (mounted) setAuthLoading(false);
+        if (mounted) {
+          initialSessionLoaded = true;
+          setAuthLoading(false);
+        }
       }
     };
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session ?? null);
-      setUser(session?.user ?? null);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
+      // Ignora eventos de TOKEN_REFRESHED e INITIAL_SESSION após carregamento inicial
+      // para evitar re-renders desnecessários ao voltar para a aba
+      if (initialSessionLoaded && (event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) {
+        return;
+      }
+
+      // Só atualiza se o user_id realmente mudou (login/logout)
+      setSession(prev => {
+        const prevUserId = prev?.user?.id;
+        const newUserId = newSession?.user?.id;
+        if (prevUserId === newUserId && prev !== null && newSession !== null) {
+          return prev; // Mantém referência estável
+        }
+        return newSession ?? null;
+      });
+
+      setUser(prev => {
+        const prevId = prev?.id;
+        const newId = newSession?.user?.id;
+        if (prevId === newId && prev !== null && newSession?.user !== null) {
+          return prev; // Mantém referência estável
+        }
+        return newSession?.user ?? null;
+      });
+
       setAuthLoading(false);
     });
+
     init();
     return () => { mounted = false; subscription.unsubscribe(); };
   }, []);
 
   // ---- carrega profile + perms + features quando user mudar ----
+  // Usa user?.id como dependência em vez de user para evitar re-renders desnecessários
+  const userId = user?.id;
   useEffect(() => {
     let active = true;
     const hydrate = async () => {
       setLoading(true);
       try {
-        if (user?.id) {
-          const prof = await loadProfile(user.id);
+        if (userId) {
+          const prof = await loadProfile(userId);
           await loadPermissionsAndFeatures(prof);
         } else {
           setProfile(null);
@@ -122,18 +155,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfile(null);
         setPermissions([]);
         setFeatures([]);
-        toast({
-          title: 'Falha ao carregar perfil',
-          description: err?.message ?? 'Erro inesperado ao carregar dados do usuário.',
-          variant: 'destructive'
-        });
+        console.error('Falha ao carregar perfil:', err?.message);
       } finally {
         if (active) setLoading(false);
       }
     };
     hydrate();
     return () => { active = false; };
-  }, [user, toast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   // ---- can() leva em conta permissions + features ----
   const can = useMemo(() => {
